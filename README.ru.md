@@ -54,9 +54,9 @@ loader. Другие сборки Lunar и версии loader не провер
 не подтверждают работу в игре.
 
 1. После ручной публикации владельцем скачайте JAR из
-   [Releases](https://github.com/ZOONGG/Moonrise-Veyra/releases) либо соберите его.
+   [Releases](https://github.com/ZOONGG/Sorel-Veyra/releases) либо соберите его.
 2. Закройте игру и скопируйте JAR в каталог модов своего Weave
-   (обычно `%USERPROFILE%/.weave/mods`). Для Moonrise — в `packages/weave`.
+   (обычно `%USERPROFILE%/.weave/mods`). Для Sorel — в `packages/weave`.
 3. Запустите Minecraft 1.8.9 с loader; в игре нажмите `Enter`.
 
 Сборка сама не устанавливает мод и не изменяет Lunar. Проверка в реальной игре
@@ -70,15 +70,15 @@ loader. Другие сборки Lunar и версии loader не провер
 .\gradlew.bat clean build
 ```
 
-JAR: `build/libs/Veyra-0.1.1-moonrise.1.jar`. Задача `build` включает JUnit-тесты.
+JAR: `build/libs/Veyra-1.0.1.jar`. Задача `build` включает JUnit-тесты.
 CI собирает workflow-артефакты; Release и теги публикуются вручную.
-Для явной установки в Moonrise:
+Для явной установки в Sorel:
 
 ```powershell
-.\gradlew.bat installToMoonrise -PmoonriseHome=D:\path\to\Moonrise
+.\gradlew.bat installToSorel -PsorelHome=D:\path\to\Sorel
 ```
 
-Вместо параметра можно задать переменную `MOONRISE_HOME`.
+Вместо параметра можно задать переменную `SOREL_HOME`.
 
 ## Структура проекта
 
@@ -92,6 +92,6 @@ CI собирает workflow-артефакты; Release и теги публи�
 указывает раннюю сборку [syz66/illusion](https://github.com/syz66/illusion)
 (удалена из списка), основанную на Raven. Это историческое указание сохранено.
 Самостоятельные изменения интерфейса, конфигурации и модулей — работа
-[проекта Veyra](https://github.com/ZOONGG/Moonrise-Veyra).
+[проекта Veyra](https://github.com/ZOONGG/Sorel-Veyra).
 Loader: [Weave-MC / WeaveLoader](https://github.com/Weave-MC/Weave-Loader).
 

@@ -353,7 +353,7 @@
 - [ ] Perform in-game scenario matrix verification.
 - [ ] Review configuration migration and descriptions.
 - [ ] Conduct code-quality review.
-- [ ] Build and install a test artifact into Moonrise.
+- [ ] Build and install a test artifact into Sorel.
 - **Deliverables:** Verified JAR, migration notes, updated module documentation.
 - **Estimated time:** 2-3 working days.
 

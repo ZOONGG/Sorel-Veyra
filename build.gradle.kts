@@ -4,7 +4,7 @@ plugins {
 }
 
 group = "dev.veyra"
-version = "1.0.0-moonrise.2"
+version = "1.0.1"
 
 base {
     archivesName.set("Veyra")
@@ -61,17 +61,17 @@ tasks.jar {
     manifest.attributes("Implementation-Version" to project.version)
 }
 
-val moonriseHome = providers.gradleProperty("moonriseHome")
-    .orElse(providers.environmentVariable("MOONRISE_HOME"))
+val sorelHome = providers.gradleProperty("sorelHome")
+    .orElse(providers.environmentVariable("SOREL_HOME"))
 
-tasks.register<Copy>("installToMoonrise") {
+tasks.register<Copy>("installToSorel") {
     group = "distribution"
-    description = "Builds Veyra and copies it into Moonrise's Weave package directory."
+    description = "Builds Veyra and copies it into Sorel's Weave package directory."
     dependsOn(tasks.jar)
     from(tasks.jar)
     into(providers.provider {
-        val root = moonriseHome.orNull
-            ?: throw GradleException("Set -PmoonriseHome=<path> or MOONRISE_HOME before installing.")
+        val root = sorelHome.orNull
+            ?: throw GradleException("Set -PsorelHome=<path> or SOREL_HOME before installing.")
         file(root).resolve("packages/weave")
     })
 }

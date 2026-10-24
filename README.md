@@ -56,10 +56,10 @@ Weave 0.2.4 setup is not the target. Lunar must run the matching Minecraft versi
 with a loader setup that supports it. Other Lunar builds/loader versions are
 unverified; compilation and unit tests do not confirm in-game compatibility.
 
-1. Obtain the JAR from [Veyra Releases](https://github.com/ZOONGG/Moonrise-Veyra/releases)
+1. Obtain the JAR from [Veyra Releases](https://github.com/ZOONGG/Sorel-Veyra/releases)
    once the owner publishes it manually, or build it below.
 2. Close the game and copy the JAR into the mod directory used by your Weave
-   setup (normally `%USERPROFILE%/.weave/mods`). For Moonrise, use its
+   setup (normally `%USERPROFILE%/.weave/mods`). For Sorel, use its
    `packages/weave` directory or the explicit install task below.
 3. Launch Minecraft 1.8.9 with the configured loader and press `Enter` in-game.
 
@@ -74,18 +74,18 @@ Use JDK 17 and the included Gradle wrapper:
 .\gradlew.bat clean build
 ```
 
-The artifact is written to `build/libs/Veyra-0.1.1-moonrise.1.jar`.
+The artifact is written to `build/libs/Veyra-1.0.1.jar`.
 `build` includes the JUnit tests. CI builds and uploads workflow artifacts only;
 GitHub Releases and tags are managed manually.
 
-To build and copy it into a local Moonrise installation:
+To build and copy it into a local Sorel installation:
 
 ```powershell
-.\gradlew.bat installToMoonrise -PmoonriseHome=D:\path\to\Moonrise
+.\gradlew.bat installToSorel -PsorelHome=D:\path\to\Sorel
 ```
 
-Alternatively, set the `MOONRISE_HOME` environment variable and run the same
-task without `-PmoonriseHome`.
+Alternatively, set the `SOREL_HOME` environment variable and run the same
+task without `-PsorelHome`.
 
 ## Development layout
 
@@ -103,7 +103,7 @@ Veyra — развиваемый Weave-мод для Minecraft 1.8.9 на осн
 - Original code: [Tryflle/stormy](https://github.com/Tryflle/stormy), by Tryflle.
   Stormy's README credits an early [syz66/illusion](https://github.com/syz66/illusion)
   build (delisted), itself based on Raven. This historical attribution is retained.
-- Independent Veyra work: the [Veyra project](https://github.com/ZOONGG/Moonrise-Veyra),
+- Independent Veyra work: the [Veyra project](https://github.com/ZOONGG/Sorel-Veyra),
   including the interface, configuration, added modules and behavior changes above.
 - Loader: [Weave-MC / WeaveLoader](https://github.com/Weave-MC/Weave-Loader).
 - Bundled Inter font: Copyright 2020 The Inter Project Authors; SIL Open Font
