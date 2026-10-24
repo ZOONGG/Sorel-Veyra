@@ -4,7 +4,7 @@ plugins {
 }
 
 group = "dev.veyra"
-version = "0.1.1-moonrise.1"
+version = "1.0.0-moonrise.2"
 
 base {
     archivesName.set("Veyra")
@@ -55,6 +55,10 @@ tasks.withType<JavaCompile>().configureEach {
 
 tasks.test {
     useJUnitPlatform()
+}
+
+tasks.jar {
+    manifest.attributes("Implementation-Version" to project.version)
 }
 
 val moonriseHome = providers.gradleProperty("moonriseHome")
