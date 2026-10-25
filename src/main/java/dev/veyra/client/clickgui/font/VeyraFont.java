@@ -1,8 +1,11 @@
 package dev.veyra.client.clickgui.font;
 
-import net.minecraft.client.renderer.GlStateManager;
-import net.minecraft.client.renderer.texture.DynamicTexture;
 import org.lwjgl.opengl.GL11;
+import org.lwjgl.opengl.GL12;
+import org.lwjgl.opengl.GL13;
+import org.lwjgl.opengl.GL14;
+import org.lwjgl.opengl.GL20;
+import org.lwjgl.BufferUtils;
 
 import java.awt.Color;
 import java.awt.Font;
@@ -10,16 +13,19 @@ import java.awt.FontMetrics;
 import java.awt.Graphics2D;
 import java.awt.RenderingHints;
 import java.awt.image.BufferedImage;
+import java.awt.image.DataBufferInt;
+import java.nio.ByteBuffer;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
 
 public final class VeyraFont {
-    private static final int ATLAS_SIZE = 1024;
-    private static final int PADDING = 2;
+    private static final int ATLAS_SIZE = 2048;
+    private static final int PADDING = 4;
     private static final String GLYPHS = buildGlyphSet();
 
     private final Map<Character, Glyph> glyphs = new HashMap<>();
-    private final DynamicTexture texture;
+    private final int textureId;
     private final float nativeHeight;
 
     public VeyraFont(Font font) {
@@ -32,6 +38,9 @@ public final class VeyraFont {
         metricsGraphics.dispose();
 
         BufferedImage atlas = new BufferedImage(ATLAS_SIZE, ATLAS_SIZE, BufferedImage.TYPE_INT_ARGB);
+        // Transparent texels retain white RGB so linear sampling interpolates
+        // coverage, rather than darkening strokes against transparent black.
+        Arrays.fill(((DataBufferInt) atlas.getRaster().getDataBuffer()).getData(), 0x00FFFFFF);
         Graphics2D graphics = atlas.createGraphics();
         configure(graphics);
         graphics.setFont(font);
@@ -41,8 +50,9 @@ public final class VeyraFont {
         int y = PADDING;
         int rowHeight = 0;
         for (char character : GLYPHS.toCharArray()) {
-            int advance = Math.max(1, metrics.charWidth(character));
-            int glyphWidth = advance + PADDING * 2;
+            float advance = Math.max(1, (float) font.getStringBounds(
+                    String.valueOf(character), graphics.getFontRenderContext()).getWidth());
+            int glyphWidth = (int) Math.ceil(advance) + PADDING * 2;
             int glyphHeight = metrics.getHeight() + PADDING * 2;
             if (x + glyphWidth >= ATLAS_SIZE) {
                 x = PADDING;
@@ -59,9 +69,48 @@ public final class VeyraFont {
             rowHeight = Math.max(rowHeight, glyphHeight);
         }
         graphics.dispose();
-        texture = new DynamicTexture(atlas);
-        // Nearest sampling keeps 1px stems readable in Minecraft's scaled GUI.
-        texture.setBlurMipmap(false, false);
+        textureId = GL11.glGenTextures();
+        uploadCoverageMipmaps(atlas);
+    }
+
+    private void uploadCoverageMipmaps(BufferedImage atlas) {
+        int previousUnit = GL11.glGetInteger(GL13.GL_ACTIVE_TEXTURE);
+        GL11.glPushAttrib(GL11.GL_TEXTURE_BIT);
+        GL13.glActiveTexture(GL13.GL_TEXTURE0);
+        GL11.glBindTexture(GL11.GL_TEXTURE_2D, textureId);
+        int size = ATLAS_SIZE;
+        int[] pixels = atlas.getRGB(0, 0, size, size, null, 0, size);
+        int level = 0;
+        while (true) {
+            ByteBuffer bytes = BufferUtils.createByteBuffer(pixels.length * 4);
+            for (int pixel : pixels) {
+                bytes.put((byte) 255).put((byte) 255).put((byte) 255).put((byte) (pixel >>> 24));
+            }
+            bytes.flip();
+            GL11.glTexImage2D(GL11.GL_TEXTURE_2D, level, GL11.GL_RGBA8,
+                    size, size, 0, GL11.GL_RGBA, GL11.GL_UNSIGNED_BYTE, bytes);
+            if (size == 1) break;
+            int nextSize = size / 2;
+            int[] next = new int[nextSize * nextSize];
+            for (int y = 0; y < nextSize; y++) {
+                for (int x = 0; x < nextSize; x++) {
+                    int at = y * 2 * size + x * 2;
+                    int alpha = ((pixels[at] >>> 24) + (pixels[at + 1] >>> 24)
+                            + (pixels[at + size] >>> 24) + (pixels[at + size + 1] >>> 24) + 2) / 4;
+                    next[y * nextSize + x] = alpha << 24 | 0x00FFFFFF;
+                }
+            }
+            pixels = next;
+            size = nextSize;
+            level++;
+        }
+        GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MIN_FILTER, GL11.GL_LINEAR_MIPMAP_LINEAR);
+        GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MAG_FILTER, GL11.GL_LINEAR);
+        GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_WRAP_S, GL12.GL_CLAMP_TO_EDGE);
+        GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_WRAP_T, GL12.GL_CLAMP_TO_EDGE);
+        GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL12.GL_TEXTURE_MAX_LEVEL, level);
+        GL11.glPopAttrib();
+        GL13.glActiveTexture(previousUnit);
     }
 
     public void draw(String text, float x, float y, int color, float height) {
@@ -112,15 +161,39 @@ public final class VeyraFont {
         float green = (float)(color >>> 8 & 255) / 255.0F;
         float blue = (float)(color & 255) / 255.0F;
 
-        GlStateManager.pushMatrix();
-        GlStateManager.enableBlend();
-        GlStateManager.tryBlendFuncSeparate(770, 771, 1, 0);
-        GlStateManager.enableTexture2D();
-        GlStateManager.bindTexture(texture.getGlTextureId());
-        GlStateManager.color(red, green, blue, alpha);
-
-        float cursor = snapHalf(x);
-        float drawY = snapHalf(y);
+        // Other legacy mods can change raw GL behind Minecraft's state cache.
+        // Establish authoritative texture/blend state and restore it without
+        // touching that cache. An untextured or unblended quad becomes a solid bar.
+        int previousUnit = GL11.glGetInteger(GL13.GL_ACTIVE_TEXTURE);
+        int previousProgram = GL11.glGetInteger(GL20.GL_CURRENT_PROGRAM);
+        GL20.glUseProgram(0);
+        GL11.glPushAttrib(GL11.GL_ENABLE_BIT | GL11.GL_TEXTURE_BIT
+                | GL11.GL_COLOR_BUFFER_BIT | GL11.GL_CURRENT_BIT);
+        for (int i = GL11.glGetInteger(GL13.GL_MAX_TEXTURE_UNITS) - 1; i > 0; i--) {
+            GL13.glActiveTexture(GL13.GL_TEXTURE0 + i);
+            GL11.glDisable(GL11.GL_TEXTURE_2D);
+        }
+        GL13.glActiveTexture(GL13.GL_TEXTURE0);
+        int previousMatrixMode = GL11.glGetInteger(GL11.GL_MATRIX_MODE);
+        GL11.glMatrixMode(GL11.GL_TEXTURE); GL11.glPushMatrix(); GL11.glLoadIdentity();
+        GL11.glMatrixMode(previousMatrixMode);
+        GL11.glDisable(GL11.GL_TEXTURE_GEN_S); GL11.glDisable(GL11.GL_TEXTURE_GEN_T);
+        GL11.glDisable(GL11.GL_TEXTURE_GEN_R); GL11.glDisable(GL11.GL_TEXTURE_GEN_Q);
+        GL11.glDisable(GL11.GL_DEPTH_TEST); GL11.glDisable(GL11.GL_CULL_FACE);
+        GL11.glDisable(GL11.GL_COLOR_LOGIC_OP);
+        GL11.glTexEnvf(GL14.GL_TEXTURE_FILTER_CONTROL, GL14.GL_TEXTURE_LOD_BIAS, 0);
+        GL14.glBlendEquation(GL14.GL_FUNC_ADD);
+        GL11.glEnable(GL11.GL_BLEND);
+        GL14.glBlendFuncSeparate(GL11.GL_SRC_ALPHA, GL11.GL_ONE_MINUS_SRC_ALPHA, GL11.GL_ONE, GL11.GL_ZERO);
+        GL11.glEnable(GL11.GL_TEXTURE_2D);
+        GL11.glBindTexture(GL11.GL_TEXTURE_2D, textureId);
+        GL11.glColor4f(red, green, blue, alpha);
+        GL11.glDisable(GL11.GL_ALPHA_TEST);
+        GL11.glDisable(GL11.GL_LIGHTING);
+        GL11.glDisable(GL11.GL_FOG);
+        GL11.glTexEnvi(GL11.GL_TEXTURE_ENV, GL11.GL_TEXTURE_ENV_MODE, GL11.GL_MODULATE);
+        float cursor = x;
+        float drawY = y;
         GL11.glBegin(GL11.GL_QUADS);
         for (char character : text.toCharArray()) {
             Glyph glyph = glyphs.getOrDefault(character, glyphs.get('?'));
@@ -130,16 +203,15 @@ public final class VeyraFont {
 
             float drawWidth = glyph.width * scale;
             float drawHeight = glyph.height * scale;
-            // Half-texel inset prevents neighbouring glyphs leaking into
-            // thin strokes when the GUI scale is fractional.
-            float u0 = (glyph.x + 0.5F) / ATLAS_SIZE;
-            float v0 = (glyph.y + 0.5F) / ATLAS_SIZE;
-            float u1 = (glyph.x + glyph.width - 0.5F) / ATLAS_SIZE;
-            float v1 = (glyph.y + glyph.height - 0.5F) / ATLAS_SIZE;
+            // Preserve the full padded cell and continuous glyph geometry.
+            float u0 = glyph.x / (float) ATLAS_SIZE;
+            float v0 = glyph.y / (float) ATLAS_SIZE;
+            float u1 = (glyph.x + glyph.width) / (float) ATLAS_SIZE;
+            float v1 = (glyph.y + glyph.height) / (float) ATLAS_SIZE;
 
             GL11.glTexCoord2f(u0, v0);
-            float drawLeft = snapHalf(cursor);
-            float drawRight = snapHalf(cursor + drawWidth);
+            float drawLeft = cursor;
+            float drawRight = cursor + drawWidth;
             GL11.glVertex2f(drawLeft, drawY);
             GL11.glTexCoord2f(u0, v1);
             GL11.glVertex2f(drawLeft, drawY + drawHeight);
@@ -150,20 +222,19 @@ public final class VeyraFont {
             cursor += glyph.advance * scale + tracking;
         }
         GL11.glEnd();
+        GL11.glMatrixMode(GL11.GL_TEXTURE); GL11.glPopMatrix();
+        GL11.glMatrixMode(previousMatrixMode);
+        GL11.glPopAttrib();
+        GL20.glUseProgram(previousProgram);
 
-        GlStateManager.color(1.0F, 1.0F, 1.0F, 1.0F);
-        GlStateManager.popMatrix();
+        GL13.glActiveTexture(previousUnit);
     }
 
     private static void configure(Graphics2D graphics) {
         graphics.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
-        graphics.setRenderingHint(RenderingHints.KEY_FRACTIONALMETRICS, RenderingHints.VALUE_FRACTIONALMETRICS_OFF);
+        graphics.setRenderingHint(RenderingHints.KEY_FRACTIONALMETRICS, RenderingHints.VALUE_FRACTIONALMETRICS_ON);
         graphics.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY);
         graphics.setRenderingHint(RenderingHints.KEY_STROKE_CONTROL, RenderingHints.VALUE_STROKE_PURE);
-    }
-
-    private static float snapHalf(float value) {
-        return Math.round(value * 2.0F) / 2.0F;
     }
 
     private static int withAlpha(int base, int source, float multiplier) {
@@ -188,9 +259,9 @@ public final class VeyraFont {
         private final int y;
         private final int width;
         private final int height;
-        private final int advance;
+        private final float advance;
 
-        private Glyph(int x, int y, int width, int height, int advance) {
+        private Glyph(int x, int y, int width, int height, float advance) {
             this.x = x;
             this.y = y;
             this.width = width;

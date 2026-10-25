@@ -6,16 +6,6 @@ public record BridgeAssistContext(
         boolean valid,
         boolean edgeReached,
         boolean emergencyEdgeReached,
-        boolean jumpNeedsSneak,
         boolean physicalSneakDown
 ) {
-    public BridgeAssistContext(
-            long nowMs,
-            boolean valid,
-            boolean edgeReached,
-            boolean jumpNeedsSneak,
-            boolean physicalSneakDown
-    ) {
-        this(nowMs, valid, edgeReached, edgeReached, jumpNeedsSneak, physicalSneakDown);
-    }
 }

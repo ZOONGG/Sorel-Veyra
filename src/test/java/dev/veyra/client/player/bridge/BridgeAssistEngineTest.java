@@ -9,9 +9,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class BridgeAssistEngineTest {
     private final BridgeAssistEngine engine = new BridgeAssistEngine();
     private final BridgeAssistSettings settings = new BridgeAssistSettings(
-            50L, false, true, false);
+            50L, false, false);
     private final BridgeAssistSettings adaptiveSettings = new BridgeAssistSettings(
-            50L, false, true, true);
+            50L, false, true);
 
     @Test
     void startsSneakingOnlyAfterTheConfiguredEdgeIsReached() {
@@ -21,7 +21,7 @@ class BridgeAssistEngineTest {
     }
 
     @Test
-    void successfulPlacementReleasesAfterUnsneakDelayWithoutDoubleSneaking() {
+    void successfulPlacementReleasesAfterUnsneakDelayAndConfirmedSupport() {
         assertTrue(engine.tick(context(1_000L, true), settings));
         engine.onBlockPlaced(1_010L, settings);
 
@@ -52,18 +52,19 @@ class BridgeAssistEngineTest {
     }
 
     @Test
-    void sneakOnJumpIsExplicitAndReleasesWhenSupportReturns() {
-        BridgeAssistSettings jumpSettings = new BridgeAssistSettings(0L, true, true);
-        BridgeAssistContext jumpingOverAir = new BridgeAssistContext(
-                1_000L, true, false, true, false);
-
-        assertTrue(engine.tick(jumpingOverAir, jumpSettings));
-        assertFalse(engine.tick(context(1_001L, false), jumpSettings));
+    void heldSneakCanActivateAssistAndReleaseCancelsThePendingCycle() {
+        BridgeAssistSettings held = new BridgeAssistSettings(50L, true, false);
+        assertFalse(engine.tick(context(1_000L, true), held));
+        assertTrue(engine.tick(new BridgeAssistContext(1_001L, true, true, true, true), held));
+        engine.onBlockPlaced(1_002L, held);
+        assertFalse(engine.tick(context(1_003L, true), held));
+        assertFalse(engine.requiresSafetyContinuation());
+        assertTrue(engine.tick(new BridgeAssistContext(1_004L, true, true, true, true), held));
     }
 
     @Test
-    void doubleSneakGuardCanBeDisabledForBlatantTiming() {
-        BridgeAssistSettings blatant = new BridgeAssistSettings(0L, false, false, false);
+    void zeroDelayStillRetainsSneakUntilSupportAppears() {
+        BridgeAssistSettings blatant = new BridgeAssistSettings(0L, false, false);
         assertTrue(engine.tick(context(1_000L, true), blatant));
         engine.onBlockPlaced(1_001L, blatant);
 
@@ -139,6 +140,6 @@ class BridgeAssistEngineTest {
             boolean emergencyEdgeReached
     ) {
         return new BridgeAssistContext(
-                nowMs, true, edgeReached, emergencyEdgeReached, false, false);
+                nowMs, true, edgeReached, emergencyEdgeReached, false);
     }
 }

@@ -21,6 +21,13 @@ public class MinecraftMixin {
         dev.veyra.client.module.modules.movement.Timer.updateRuntime();
     }
 
+    @Inject(method = "runGameLoop", at = @At(value = "INVOKE",
+            target = "Lnet/minecraft/client/renderer/EntityRenderer;updateCameraAndRender(FJ)V",
+            shift = At.Shift.AFTER))
+    private void veyra$renderNotificationsEveryFrame(CallbackInfo ci) {
+        if (Veyra.notificationManager != null) Veyra.notificationManager.renderFrame();
+    }
+
     // Vanilla updateTimer multiplies elapsed time by timerSpeed, so literal zero
     // stops ticks without division or blocking. GUI input normally lives in runTick;
     // service it on tickless frames using a separate real-time cadence.

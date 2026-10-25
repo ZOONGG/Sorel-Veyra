@@ -1,0 +1,9 @@
+allprojects {
+    afterEvaluate {
+        tasks.register('bindUxClasspath') {
+            doLast {
+                file('build/bind-ux-probe-classpath.txt').text = sourceSets.main.runtimeClasspath.asPath + File.pathSeparator + configurations.compileClasspath.asPath
+            }
+        }
+    }
+}

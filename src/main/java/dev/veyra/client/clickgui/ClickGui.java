@@ -25,6 +25,7 @@ import java.awt.Color;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.IdentityHashMap;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -44,6 +45,7 @@ public final class ClickGui extends GuiScreen {
 
     /* Kept for backwards-compatible client.scfg coordinates. */
     private final ArrayList<CategoryComponent> categoryList = new ArrayList<>();
+    private final Map<Module, Float> expansion = new IdentityHashMap<>();
     private final Map<Module, Float> hover = new IdentityHashMap<>();
     private final Map<Object, Float> toggleAnimation = new IdentityHashMap<>();
     private final Map<Module, Float> favoriteVisualY = new IdentityHashMap<>();
@@ -56,6 +58,8 @@ public final class ClickGui extends GuiScreen {
     private Module.ModuleCategory selectedCategory = Module.ModuleCategory.Combat;
     private boolean favoritesSelected;
     private Module bindingModule;
+    private long bindingStartedNanos;
+    private static final long BIND_TIMEOUT_NANOS = 3_000_000_000L;
     private Setting activeSlider;
     private Rect activeSliderRow = Rect.EMPTY;
     private boolean activeRangeMaximum;
@@ -68,6 +72,11 @@ public final class ClickGui extends GuiScreen {
     private int searchAnchor;
     private boolean searchFocused;
     private int scroll;
+    private float scrollPosition;
+    private float scrollTarget;
+    private final Map<String, Float> controlMotion = new HashMap<>();
+    private final Map<Setting, Float> settingHover = new IdentityHashMap<>();
+    private final Map<Setting, float[]> sliderAnimation = new IdentityHashMap<>();
     private int maxScroll;
 
     private int windowX;
@@ -76,6 +85,10 @@ public final class ClickGui extends GuiScreen {
     private int windowHeight;
     private boolean layoutInitialized;
     private boolean draggingWindow;
+    private boolean draggingScrollbar;
+    private int scrollbarGrabOffset;
+    private Rect scrollbarThumb = Rect.EMPTY;
+    private Rect scrollbarTrack = Rect.EMPTY;
     private int dragOffsetX;
     private int dragOffsetY;
 
@@ -115,6 +128,10 @@ public final class ClickGui extends GuiScreen {
     @Override
     public void initGui() {
         Keyboard.enableRepeatEvents(true);
+        draggingWindow = false;
+        draggingScrollbar = false;
+        favoriteDragModule = null;
+        favoriteDragging = false;
         clipStack.clear();
         closeModuleSettings();
         updateWindowMetrics();
@@ -130,8 +147,14 @@ public final class ClickGui extends GuiScreen {
 
     @Override
     public void drawScreen(int mouseX, int mouseY, float partialTicks) {
+        updateBindCapture();
         updateWindowMetrics();
+        if (!Mouse.isButtonDown(0) && (draggingWindow || draggingScrollbar || activeSlider != null
+                || activeColor != null || favoriteDragModule != null)) {
+            mouseReleased(mouseX, mouseY, 0);
+        }
         updateDraggedWindow(mouseX, mouseY);
+        updateDraggedScrollbar(mouseY);
         updateDraggedSetting(mouseX, mouseY);
         updateAnimations(mouseX, mouseY);
 
@@ -140,7 +163,6 @@ public final class ClickGui extends GuiScreen {
 
         drawGradientRect(0, 0, width, height,
                 UiTokens.Color.BACKDROP_TOP, UiTokens.Color.BACKDROP_BOTTOM);
-        drawBackdropAccents();
         int scrim = Math.round(118.0F * easeOutCubic(openAnimation));
         drawRect(0, 0, width, height,
                 withAlpha(UiTokens.Color.BACKDROP_SCRIM, scrim));
@@ -150,6 +172,8 @@ public final class ClickGui extends GuiScreen {
         actionHitboxes.clear();
         settingHitboxes.clear();
 
+        scrollbarThumb = Rect.EMPTY;
+        scrollbarTrack = Rect.EMPTY;
         drawWindow();
         drawHeader(mouseX, mouseY);
         drawTabs(mouseX, mouseY);
@@ -161,8 +185,8 @@ public final class ClickGui extends GuiScreen {
     }
 
     private void updateWindowMetrics() {
-        windowWidth = Math.min(IDEAL_WIDTH, Math.max(350, width - 16));
-        windowHeight = Math.min(IDEAL_HEIGHT, Math.max(270, height - 16));
+        windowWidth = Math.min(IDEAL_WIDTH, Math.max(200, width - 16));
+        windowHeight = Math.min(IDEAL_HEIGHT, Math.max(180, height - 16));
     }
 
     private void updateAnimations(int mouseX, int mouseY) {
@@ -170,6 +194,9 @@ public final class ClickGui extends GuiScreen {
         float delta = lastFrameNanos == 0L ? 0.016F
                 : Math.min(0.05F, (now - lastFrameNanos) / 1_000_000_000.0F);
         frameDelta = delta;
+        scrollTarget = Math.max(0, Math.min(maxScroll, scrollTarget));
+        scrollPosition = FrameMotion.expApproach(scrollPosition, scrollTarget, 20.0F, delta);
+        scroll = Math.round(scrollPosition);
         lastFrameNanos = now;
         openAnimation = FrameMotion.expApproach(openAnimation, 1.0F,
                 UiTokens.Motion.OPEN_SPEED, delta);
@@ -179,6 +206,8 @@ public final class ClickGui extends GuiScreen {
         for (Module module : Veyra.moduleManager.getModules()) {
             boolean hovered = moduleHitboxes.stream()
                     .anyMatch(hitbox -> hitbox.module == module && hitbox.isVisibleAt(mouseX, mouseY));
+            expansion.put(module, FrameMotion.expApproach(expansion.getOrDefault(module, 0.0F),
+                    settingsModule == module ? 1.0F : 0.0F, 16.0F, delta));
             hover.put(module, FrameMotion.expApproach(
                     hover.getOrDefault(module, 0.0F), hovered ? 1.0F : 0.0F,
                     UiTokens.Motion.HOVER_SPEED, delta));
@@ -190,35 +219,27 @@ public final class ClickGui extends GuiScreen {
                 favoriteDragging = true;
             }
             if (favoriteDragging && contentClip.height > 0 && contentClip.contains(mouseX, mouseY)) {
-                if (mouseY < contentClip.y + 16) scroll = Math.max(0, scroll - 2);
-                else if (mouseY > contentClip.bottom() - 16) scroll = Math.min(maxScroll, scroll + 2);
+                if (mouseY < contentClip.y + 16) scrollTarget = Math.max(0, scrollTarget - 150 * delta);
+                else if (mouseY > contentClip.bottom() - 16) scrollTarget = Math.min(maxScroll, scrollTarget + 150 * delta);
             }
         }
     }
 
-    private void drawBackdropAccents() {
-        RenderUtils.drawRoundedRect(windowX - 70, windowY - 35,
-                windowX + 145, windowY + 105, 70, withAlpha(accent(), 12));
-        RenderUtils.drawRoundedRect(windowRect.right() - 88, windowRect.bottom() - 78,
-                windowRect.right() + 58, windowRect.bottom() + 36, 54,
-                withAlpha(Theme.ACCENT_BLUE, 9));
-    }
-
     private void drawWindow() {
         UiDraw.surface(windowRect.x, windowRect.y, windowRect.right(), windowRect.bottom(),
-                UiTokens.Radius.WINDOW, UiTokens.Color.WINDOW, UiTokens.Color.BORDER, 2);
+                UiTokens.Radius.WINDOW, UiTokens.Color.WINDOW, UiTokens.Color.BORDER, 1);
     }
 
     private void drawHeader(int mouseX, int mouseY) {
         RenderUtils.drawRoundedRect(headerRect.x, headerRect.y,
                 headerRect.right(), headerRect.bottom(), UiTokens.Radius.WINDOW,
-                UiTokens.Color.TOPBAR);
+                UiTokens.Color.TOPBAR, new boolean[]{true, false, false, true});
         drawRect(headerRect.x, headerRect.bottom() - 1,
                 headerRect.right(), headerRect.bottom(), UiTokens.Color.DIVIDER);
 
-        VeyraFonts.semibold().drawPlainTracked("VEYRA", windowX + 16, windowY + 9,
-                UiTokens.Color.TEXT_PRIMARY, UiTokens.Type.DISPLAY, 0.35F);
-        VeyraFonts.regular().drawPlainTracked("CONTROL CENTER", windowX + 16, windowY + 25,
+        VeyraFonts.semibold().drawPlainTracked("veyra", windowX + 16, windowY + 5,
+                UiTokens.Color.TEXT_PRIMARY, 17.0F, -0.15F);
+        VeyraFonts.regular().drawPlainTracked("CONTROL CENTER", windowX + 17, windowY + 28,
                 UiTokens.Color.TEXT_MUTED, UiTokens.Type.CAPTION, 0.18F);
 
         int searchWidth = Math.min(158, Math.max(108, windowWidth / 3));
@@ -228,14 +249,12 @@ public final class ClickGui extends GuiScreen {
         boolean settingsHovered = settingsButtonRect.contains(mouseX, mouseY);
         UiDraw.button(settingsButtonRect.x, settingsButtonRect.y,
                 settingsButtonRect.right(), settingsButtonRect.bottom(),
-                settingsHovered, settingsOpen, accent());
-        VeyraFonts.semibold().drawPlain("UI", settingsButtonRect.x + 7,
-                settingsButtonRect.y + 9,
-                settingsOpen ? accent() : UiTokens.Color.TEXT_SECONDARY,
-                UiTokens.Type.LABEL);
+                motion("ui-hover", settingsHovered), motion("ui-open", settingsOpen), accent());
+        UiIcons.settings(settingsButtonRect.x + 13, settingsButtonRect.y + 13,
+                settingsOpen ? accent() : UiTokens.Color.TEXT_SECONDARY);
         boolean hovered = searchRect.contains(mouseX, mouseY);
         UiDraw.control(searchRect.x, searchRect.y, searchRect.right(), searchRect.bottom(),
-                hovered, searchFocused, accent());
+                motion("search-hover", hovered), motion("search-focus", searchFocused), accent());
         String value = searchQuery.isEmpty() ? "Search modules" : searchQuery;
         int[] visible = visibleSearchRange(searchRect.width - 20);
         String shown = searchQuery.isEmpty() ? value
@@ -365,6 +384,9 @@ public final class ClickGui extends GuiScreen {
                     hitbox.rect.right() - 2, hitbox.rect.bottom(), UiTokens.Radius.SM,
                     selected ? UiTokens.Color.SURFACE_RAISED : UiTokens.Color.SURFACE);
         }
+        if (selected) RenderUtils.drawRoundedRect(hitbox.rect.x + hitbox.rect.width / 2F - 13,
+                hitbox.rect.bottom() - 2, hitbox.rect.x + hitbox.rect.width / 2F + 13,
+                hitbox.rect.bottom(), 1, accent());
         int color = selected ? UiTokens.Color.TEXT_PRIMARY
                 : hovered ? UiTokens.Color.TEXT_SECONDARY : UiTokens.Color.TEXT_MUTED;
         float textWidth = VeyraFonts.semibold().width(label, UiTokens.Type.BODY);
@@ -377,10 +399,6 @@ public final class ClickGui extends GuiScreen {
         int top = windowY + HEADER_HEIGHT + TABS_HEIGHT;
         contentClip = new Rect(windowX + 1, top,
                 windowWidth - 2, windowRect.bottom() - top - 1);
-        if (settingsModule != null) {
-            drawModuleSettingsPage(mouseX, mouseY);
-            return;
-        }
         settingsViewport = Rect.EMPTY;
         settingsBackRect = Rect.EMPTY;
         settingsModuleToggleRect = Rect.EMPTY;
@@ -414,53 +432,6 @@ public final class ClickGui extends GuiScreen {
             }
         }
         endScissor();
-        if (maxScroll > 0) drawScrollbar();
-    }
-
-    private void drawModuleSettingsPage(int mouseX, int mouseY) {
-        int panelInset = 8;
-        int pageHeaderHeight = 48;
-        Rect panel = new Rect(contentClip.x + panelInset, contentClip.y + panelInset,
-                contentClip.width - panelInset * 2, contentClip.height - panelInset * 2);
-        UiDraw.surface(panel.x, panel.y, panel.right(), panel.bottom(), UiTokens.Radius.MD,
-                UiTokens.Color.PANEL, UiTokens.Color.BORDER_SOFT, 0);
-
-        settingsBackRect = new Rect(panel.x + 8, panel.y + 8, 48, 24);
-        settingsModuleToggleRect = new Rect(panel.right() - 40, panel.y + 14, 24, 12);
-        settingsViewport = new Rect(panel.x + 8, panel.y + pageHeaderHeight,
-                panel.width - 16, Math.max(1, panel.height - pageHeaderHeight - 8));
-
-        int pageHeight = Math.max(settingsViewport.height, expandedHeight(settingsModule));
-        maxScroll = Math.max(0, pageHeight - settingsViewport.height);
-        scroll = clamp(scroll, 0, maxScroll);
-
-        beginScissor(settingsViewport);
-        Rect body = new Rect(settingsViewport.x, settingsViewport.y - scroll,
-                settingsViewport.width, pageHeight);
-        drawExpandedModule(settingsModule, body, mouseX, mouseY,
-                accent(), true, settingsViewport);
-        endScissor();
-
-        drawRect(panel.x + 8, panel.y + pageHeaderHeight - 1,
-                panel.right() - 8, panel.y + pageHeaderHeight, UiTokens.Color.DIVIDER);
-        drawButton(settingsBackRect, "Back", settingsBackRect.contains(mouseX, mouseY),
-                false, accent());
-        VeyraFonts.semibold().drawPlain(
-                ellipsize(settingsModule.getName(), panel.width - 140,
-                        VeyraFonts.semibold(), UiTokens.Type.TITLE),
-                settingsBackRect.right() + 10, panel.y + 9,
-                UiTokens.Color.TEXT_PRIMARY, UiTokens.Type.TITLE);
-        VeyraFonts.regular().drawPlain("Module settings",
-                settingsBackRect.right() + 10, panel.y + 25,
-                UiTokens.Color.TEXT_MUTED, UiTokens.Type.CAPTION);
-        if (settingsModule.isBindOnly()) {
-            VeyraFonts.regular().drawPlain("Bind only", panel.right() - 65, panel.y + 17,
-                    UiTokens.Color.TEXT_MUTED, UiTokens.Type.CAPTION);
-        } else {
-            drawToggle(settingsModuleToggleRect, settingsModule.isEnabled(), accent(),
-                    settingsModule, settingsModuleToggleRect.contains(mouseX, mouseY));
-        }
-
         if (maxScroll > 0) drawScrollbar();
     }
 
@@ -580,25 +551,33 @@ public final class ClickGui extends GuiScreen {
         float hovered = hover.getOrDefault(module, 0.0F);
         int moduleColor = accent();
         int cardFill = mix(UiTokens.Color.SURFACE, UiTokens.Color.SURFACE_HOVER, hovered);
-        if (module.isEnabled()) cardFill = mix(cardFill, moduleColor, 0.12F);
+        float enabled = toggleAnimation.getOrDefault(module, module.isEnabled() ? 1.0F : 0.0F);
+        cardFill = mix(cardFill, moduleColor, enabled * 0.10F);
         int border = dragGhost ? withAlpha(moduleColor, 210)
-                : module.isEnabled() ? withAlpha(moduleColor, 108) : UiTokens.Color.BORDER_SOFT;
+                : mix(UiTokens.Color.BORDER_SOFT, withAlpha(moduleColor, 108), enabled);
         UiDraw.surface(card.x, card.y, card.right(), card.bottom(), UiTokens.Radius.SM,
                 cardFill, border, dragGhost ? 1 : 0);
 
         int nameX = header.x + (favoritesSelected ? 20 : 10);
-        String name = ellipsize(module.getName(), header.right() - 70 - nameX,
+        String name = ellipsize(module.getName(), header.right() - 124 - nameX,
                 VeyraFonts.semibold(), UiTokens.Type.TITLE);
         VeyraFonts.semibold().drawPlain(
                 name, nameX, header.y + 8,
                 module.canBeEnabled() ? UiTokens.Color.TEXT_PRIMARY
                         : UiTokens.Color.TEXT_DISABLED, UiTokens.Type.TITLE);
+        drawHeaderBind(module, header, mouseX, mouseY, interactive, moduleColor);
         String description = ModuleDescriptions.forModule(module.getName());
-        if (description != null && !description.isBlank()) {
+        if (module.getName().equals("AutoBlock")) {
+            boolean compactRisk = header.width < 190;
+            RenderUtils.drawRoundedRect(nameX, header.y + 24, nameX + (compactRisk ? 28 : 53),
+                    header.y + 37, 3, 0x35F05252);
+            VeyraFonts.semibold().drawPlain(compactRisk ? "RISK" : "HIGH RISK", nameX + 4, header.y + 26,
+                    0xFFFF7777, UiTokens.Type.CAPTION);
+        } else if (description != null && !description.isBlank()) {
             VeyraFonts.regular().drawPlain(
                     ellipsize(description, header.right() - 70 - nameX,
                             VeyraFonts.regular(), UiTokens.Type.CAPTION),
-                    nameX, header.y + 25, UiTokens.Color.TEXT_MUTED,
+                    nameX, header.y + 30, UiTokens.Color.TEXT_MUTED,
                     UiTokens.Type.CAPTION);
         }
 
@@ -609,8 +588,7 @@ public final class ClickGui extends GuiScreen {
         int starColor = module.isFavorite() ? UiTokens.Color.WARNING
                 : star.contains(mouseX, mouseY) ? UiTokens.Color.TEXT_PRIMARY
                 : UiTokens.Color.TEXT_MUTED;
-        VeyraFonts.semibold().drawPlain(module.isFavorite() ? "★" : "☆",
-                star.x + 4, star.y + 7, starColor, 11.0F);
+        UiIcons.star(star.x + 10, star.y + 12, 5.6F, starColor, module.isFavorite());
         if (module.isBindOnly()) {
             VeyraFonts.regular().drawPlain("Bind", toggle.x, toggle.y,
                     UiTokens.Color.TEXT_MUTED, UiTokens.Type.CAPTION);
@@ -618,10 +596,89 @@ public final class ClickGui extends GuiScreen {
             drawToggle(toggle, module.isEnabled(), moduleColor, module,
                     interactive && toggle.contains(mouseX, mouseY));
         }
-        VeyraFonts.semibold().drawPlain(">",
-                expandButton.x + 4, expandButton.y + 15,
-                expandButton.contains(mouseX, mouseY) ? moduleColor : UiTokens.Color.TEXT_MUTED,
-                UiTokens.Type.BODY);
+        UiIcons.chevron(expandButton.x + 8, header.y + 21,
+                expansion.getOrDefault(module, 0.0F),
+                expandButton.contains(mouseX, mouseY) ? moduleColor : UiTokens.Color.TEXT_SECONDARY);
+        if (!dragGhost && card.height > MODULE_HEADER_HEIGHT) {
+            Rect viewport = new Rect(card.x + 1, header.bottom(), card.width - 2,
+                    card.height - MODULE_HEADER_HEIGHT - 1);
+            beginScissor(viewport);
+            drawRect(card.x + 9, header.bottom(), card.right() - 9, header.bottom() + 1,
+                    UiTokens.Color.DIVIDER);
+            drawExpandedModule(module, new Rect(card.x, header.bottom() + 2,
+                    card.width, expandedHeight(module)), mouseX, mouseY, moduleColor,
+                    interactive && settingsModule == module, intersect(viewport, contentClip));
+            endScissor();
+        }
+    }
+
+    private static Rect intersect(Rect a, Rect b) {
+        int x = Math.max(a.x, b.x), y = Math.max(a.y, b.y);
+        return new Rect(x, y, Math.max(0, Math.min(a.right(), b.right()) - x),
+                Math.max(0, Math.min(a.bottom(), b.bottom()) - y));
+    }
+
+    private Rect drawHeaderBind(Module module, Rect header, int mouseX, int mouseY,
+                                boolean interactive, int moduleColor) {
+        boolean capturing = bindingModule == module;
+        Rect bind = new Rect(header.right() - 118, header.y + 13, 48, 15);
+        boolean hasBind = module.getKeycode() != Keyboard.KEY_NONE;
+        boolean hovered = bind.contains(mouseX, mouseY);
+        Rect clear = new Rect(bind.right() - 13, bind.y, 13, bind.height);
+        drawButton(bind, "", hovered, capturing, moduleColor);
+        String label = capturing ? "Press…" : hasBind ? compactKeyName(module.getKeycode()) : "Bind";
+        VeyraFonts.regular().drawPlain(ellipsize(label,
+                bind.width - (hasBind && hovered && !capturing ? 19 : 8),
+                VeyraFonts.regular(), UiTokens.Type.CAPTION), bind.x + 4, bind.y + 3,
+                capturing ? moduleColor : UiTokens.Color.TEXT_SECONDARY, UiTokens.Type.CAPTION);
+        if (interactive) actionHitboxes.add(new ActionHitbox(module, ActionType.BIND, bind, contentClip));
+        if (hasBind && hovered && !capturing) {
+            VeyraFonts.semibold().drawPlain("×", clear.x + 3, clear.y + 2,
+                    clear.contains(mouseX, mouseY) ? 0xFFFF7777 : UiTokens.Color.TEXT_PRIMARY,
+                    UiTokens.Type.LABEL);
+            if (interactive) actionHitboxes.add(new ActionHitbox(module, ActionType.CLEAR_BIND, clear, contentClip));
+        }
+        return bind;
+    }
+
+    private static String compactKeyName(int key) {
+        if (key < 0) return "MOUSE" + (key + 101);
+        String name = Keyboard.getKeyName(key);
+        return name == null ? Integer.toString(key) : name;
+    }
+
+    private void beginBind(Module module) {
+        bindingModule = module;
+        bindingStartedNanos = System.nanoTime();
+        searchFocused = false;
+        activeSlider = null;
+        activeColor = null;
+    }
+
+    private void finishBind(int key) {
+        Module target = bindingModule;
+        bindingModule = null;
+        if (target == null) return;
+        dev.veyra.client.module.bind.CapturedBindInput.suppressUntilRelease(key);
+        target.setBind(key);
+        saveClientState();
+    }
+
+    private void clearBind(Module module) {
+        bindingModule = null;
+        module.setBind(Keyboard.KEY_NONE);
+        saveClientState();
+    }
+
+    private void updateBindCapture() {
+        if (bindingModule == null) return;
+        if (!org.lwjgl.opengl.Display.isActive()) bindingModule = null;
+        else if (System.nanoTime() - bindingStartedNanos >= BIND_TIMEOUT_NANOS) clearBind(bindingModule);
+    }
+
+    @Override
+    public void updateScreen() {
+        updateBindCapture();
     }
 
     private void drawExpandedModule(Module module, Rect body, int mouseX, int mouseY,
@@ -629,26 +686,6 @@ public final class ClickGui extends GuiScreen {
         int x = body.x + 8;
         int innerWidth = body.width - 16;
         int y = body.y + 6;
-        Rect reset = new Rect(x, y, 42, 17);
-        Rect bindMode = new Rect(x + 47, y, 52, 17);
-        Rect bind = new Rect(x + 104, y, Math.max(58, innerWidth - 104), 17);
-        Rect actionRow = new Rect(x, y, innerWidth, 17);
-        boolean actionsVisible = verticallyVisible(actionRow, viewport);
-        if (interactive && actionsVisible) {
-            actionHitboxes.add(new ActionHitbox(module, ActionType.RESET, reset, viewport));
-            actionHitboxes.add(new ActionHitbox(module, ActionType.BIND_MODE, bindMode, viewport));
-            actionHitboxes.add(new ActionHitbox(module, ActionType.BIND, bind, viewport));
-        }
-        if (actionsVisible) {
-            drawButton(reset, "Reset", reset.contains(mouseX, mouseY), false, moduleColor);
-            drawButton(bindMode, bindModeLabel(module), bindMode.contains(mouseX, mouseY),
-                    module.getBindMode() != dev.veyra.client.module.bind.BindMode.TOGGLE, moduleColor);
-            boolean binding = bindingModule == module;
-            drawButton(bind, binding ? "Press a key" : keyName(module.getKeycode()),
-                    bind.contains(mouseX, mouseY), binding, moduleColor);
-        }
-        y += 23;
-
         for (Setting setting : module.getSettings()) {
             if (!setting.isVisible() || setting instanceof DescriptionSetting) continue;
             int settingHeight = settingHeight(setting);
@@ -663,8 +700,17 @@ public final class ClickGui extends GuiScreen {
         }
     }
 
+    private float motion(String key, boolean active) {
+        float target = active ? 1 : 0;
+        float value = FrameMotion.expApproach(controlMotion.getOrDefault(key, 0.0F), target,
+                UiTokens.Motion.HOVER_SPEED, frameDelta);
+        controlMotion.put(key, value);
+        return value;
+    }
+
     private void drawButton(Rect rect, String text, boolean hovered, boolean active, int color) {
-        UiDraw.button(rect.x, rect.y, rect.right(), rect.bottom(), hovered, active, color);
+        UiDraw.button(rect.x, rect.y, rect.right(), rect.bottom(),
+                motion("button-hover:" + text, hovered), motion("button-active:" + text, active), color);
         String shown = ellipsize(text, rect.width - 8,
                 VeyraFonts.semibold(), UiTokens.Type.LABEL);
         VeyraFonts.semibold().drawPlain(shown,
@@ -677,15 +723,30 @@ public final class ClickGui extends GuiScreen {
     private void drawSetting(Setting setting, Rect row, int mouseX, int mouseY,
                              int color, Rect viewport) {
         boolean hovered = row.contains(mouseX, mouseY) && viewport.contains(mouseX, mouseY);
-        if (hovered) {
-            RenderUtils.drawRoundedRect(row.x - 3, row.y + 1,
-                    row.right() + 3, row.bottom() - 1,
-                    UiTokens.Radius.SM, UiTokens.Color.SURFACE_HOVER);
-        }
+        float hoverProgress = FrameMotion.expApproach(settingHover.getOrDefault(setting, 0.0F),
+                hovered ? 1.0F : 0.0F, UiTokens.Motion.HOVER_SPEED, frameDelta);
+        settingHover.put(setting, hoverProgress);
+        RenderUtils.drawRoundedRect(row.x - 4, row.y + 1,
+                row.right() + 4, row.bottom() - 1, UiTokens.Radius.SM,
+                withAlpha(UiTokens.Color.SURFACE_HOVER, Math.round(150 * hoverProgress)));
+        if (activeSlider == setting) activeSliderRow = row;
+        if (activeColor == setting) activeColorRow = row;
         String label = cleanLabel(setting.getName());
-        VeyraFonts.semibold().drawPlain(
-                ellipsize(label, row.width - 75,
-                        VeyraFonts.semibold(), UiTokens.Type.BODY),
+        float reserved = 36;
+        if (setting instanceof ComboSetting<?> combo) {
+            reserved = Math.min(88, Math.max(38,
+                    VeyraFonts.semibold().width(String.valueOf(combo.getMode()), UiTokens.Type.LABEL) + 19)) + 10;
+        } else if (setting instanceof DoubleSliderSetting range) {
+            reserved = VeyraFonts.semibold().width(formatNumber(range.getInputMin()) + " – "
+                    + formatNumber(range.getInputMax()), UiTokens.Type.CAPTION) + 12;
+        } else if (setting instanceof SliderSetting slider) {
+            reserved = VeyraFonts.semibold().width(formatNumber(slider.getInput()), UiTokens.Type.CAPTION) + 12;
+        } else if (setting instanceof ColorSetting colorSetting) {
+            reserved = VeyraFonts.semibold().width(colorSetting.getHex(), UiTokens.Type.CAPTION) + 36;
+        }
+        VeyraFonts.regular().drawPlain(
+                ellipsize(label, Math.max(0, row.width - reserved),
+                        VeyraFonts.regular(), UiTokens.Type.BODY),
                 row.x, row.y + 6, UiTokens.Color.TEXT_SECONDARY, UiTokens.Type.BODY);
 
         if (setting instanceof TickSetting tick) {
@@ -708,14 +769,14 @@ public final class ClickGui extends GuiScreen {
             VeyraFonts.semibold().drawPlain(value,
                     row.right() - VeyraFonts.semibold().width(value, UiTokens.Type.CAPTION),
                     row.y + 5, UiTokens.Color.TEXT_PRIMARY, UiTokens.Type.CAPTION);
-            drawSliderTrack(new Rect(row.x, row.y + 21, row.width, 3),
+            drawAnimatedSlider(setting, new Rect(row.x, row.y + 21, row.width, 3),
                     normalized(slider.getInput(), slider.getMin(), slider.getMax()), -1, color);
         } else if (setting instanceof DoubleSliderSetting range) {
             String value = formatNumber(range.getInputMin()) + " – " + formatNumber(range.getInputMax());
             VeyraFonts.semibold().drawPlain(value,
                     row.right() - VeyraFonts.semibold().width(value, UiTokens.Type.CAPTION),
                     row.y + 5, UiTokens.Color.TEXT_PRIMARY, UiTokens.Type.CAPTION);
-            drawSliderTrack(new Rect(row.x, row.y + 22, row.width, 3),
+            drawAnimatedSlider(setting, new Rect(row.x, row.y + 22, row.width, 3),
                     normalized(range.getInputMin(), range.getMin(), range.getMax()),
                     normalized(range.getInputMax(), range.getMin(), range.getMax()), color);
         } else if (setting instanceof ColorSetting colorSetting) {
@@ -736,8 +797,15 @@ public final class ClickGui extends GuiScreen {
                 hovered, hovered && Mouse.isButtonDown(0), color);
     }
 
-    private void drawSliderTrack(Rect track, float first, float second, int color) {
-        UiDraw.slider(track.x, track.y, track.right(), track.bottom(), first, second, color);
+    private void drawAnimatedSlider(Setting setting, Rect track, float first, float second, int color) {
+        float[] state = sliderAnimation.computeIfAbsent(setting, ignored -> new float[]{first, second});
+        // Direct manipulation follows the pointer exactly; external changes ease into place.
+        state[0] = activeSlider == setting ? first
+                : FrameMotion.expApproach(state[0], first, 22, frameDelta);
+        state[1] = second < 0 ? -1 : activeSlider == setting ? second
+                : FrameMotion.expApproach(state[1], second, 22, frameDelta);
+        float emphasis = activeSlider == setting ? 1 : settingHover.getOrDefault(setting, 0.0F);
+        UiDraw.slider(track.x, track.y, track.right(), track.bottom(), state[0], state[1], color, emphasis);
     }
 
     private void drawDragGrip(Rect rect, int color) {
@@ -767,8 +835,9 @@ public final class ClickGui extends GuiScreen {
         for (int segment = 0; segment < 12; segment++) {
             int left = hue.x + Math.round(hue.width * (segment / 12.0F));
             int right = hue.x + Math.round(hue.width * ((segment + 1) / 12.0F));
-            drawRect(left, hue.y, Math.max(left + 1, right), hue.bottom(),
-                    opaqueHsb((segment + 0.5F) / 12.0F, 1, 1));
+            int start = opaqueHsb(segment / 12.0F, 1, 1);
+            int end = opaqueHsb((segment + 1) / 12.0F, 1, 1);
+            RenderUtils.gradient(left, hue.y, right, hue.bottom(), start, end, end, start);
         }
 
         int markerX = sv.x + Math.round(sv.width * color.getSaturation());
@@ -781,36 +850,40 @@ public final class ClickGui extends GuiScreen {
     }
 
     private void drawSaturationValueGrid(Rect rect, float hue) {
-        // Discrete opaque cells are intentionally used instead of inherited
-        // OpenGL gradients. They remain fully colored inside nested scissors
-        // on Lunar's render pipeline and avoid the blank picker regression.
-        // This used to issue 288 separate draw calls per picker, including
-        // for pickers outside the viewport. A smaller grid remains visually
-        // smooth at this size and keeps Lunar's legacy renderer responsive.
-        final int columns = 12;
-        final int rows = 6;
-        for (int column = 0; column < columns; column++) {
-            float s0 = column / (float) columns;
-            float s1 = (column + 1) / (float) columns;
-            int x0 = rect.x + Math.round(rect.width * s0);
-            int x1 = rect.x + Math.round(rect.width * s1);
-            for (int row = 0; row < rows; row++) {
-                float v0 = 1.0F - row / (float) rows;
-                float v1 = 1.0F - (row + 1) / (float) rows;
-                int y0 = rect.y + Math.round(rect.height * (row / (float) rows));
-                int y1 = rect.y + Math.round(rect.height * ((row + 1) / (float) rows));
-                drawRect(x0, y0, Math.max(x0 + 1, x1), Math.max(y0 + 1, y1),
-                        opaqueHsb(hue, (s0 + s1) * 0.5F, (v0 + v1) * 0.5F));
-            }
-        }
+        int hueColor = opaqueHsb(hue, 1, 1);
+        RenderUtils.gradient(rect.x, rect.y, rect.right(), rect.bottom(),
+                0xFFFFFFFF, hueColor, hueColor, 0xFFFFFFFF);
+        RenderUtils.gradient(rect.x, rect.y, rect.right(), rect.bottom(),
+                0x00000000, 0x00000000, 0xFF000000, 0xFF000000);
     }
 
     @Override
     public void mouseClicked(int mouseX, int mouseY, int mouseButton) {
+        updateBindCapture();
         if (bindingModule != null) {
-            bindingModule.setBind(mouseButton - 100);
-            bindingModule = null;
-            saveClientState();
+            // Search and bind controls retain their normal meaning in capture.
+            if (searchRect.contains(mouseX, mouseY)) bindingModule = null;
+            else {
+                for (int i = actionHitboxes.size() - 1; i >= 0; i--) {
+                    ActionHitbox hitbox = actionHitboxes.get(i);
+                    if (!hitbox.isVisibleAt(mouseX, mouseY)) continue;
+                    if (mouseButton == 0) {
+                        if (hitbox.action == ActionType.CLEAR_BIND) clearBind(hitbox.module);
+                        else beginBind(hitbox.module);
+                    }
+                    return;
+                }
+                if (mouseButton >= 0 && mouseButton < Mouse.getButtonCount()
+                        && (bindingModule == clickGuiModule() || clickGuiModule() == null
+                        || mouseButton - 100 != clickGuiModule().getKeycode())) finishBind(mouseButton - 100);
+                return;
+            }
+        }
+        if (!settingsOpen && mouseButton == 0 && scrollbarTrack.contains(mouseX, mouseY)) {
+            draggingScrollbar = true;
+            scrollbarGrabOffset = scrollbarThumb.contains(mouseX, mouseY)
+                    ? mouseY - scrollbarThumb.y : scrollbarThumb.height / 2;
+            updateDraggedScrollbar(mouseY);
             return;
         }
         if (settingsButtonRect.contains(mouseX, mouseY) && mouseButton == 0) {
@@ -831,7 +904,7 @@ public final class ClickGui extends GuiScreen {
             return;
         }
         if (settingsOpen && shortcutButtonRect.contains(mouseX, mouseY) && mouseButton == 0) {
-            bindingModule = clickGuiModule();
+            beginBind(clickGuiModule());
             return;
         }
         if (settingsOpen && settingsPanelRect.contains(mouseX, mouseY)) {
@@ -845,20 +918,9 @@ public final class ClickGui extends GuiScreen {
             return;
         }
         searchFocused = false;
-        if (settingsOpen) settingsOpen = false;
-
-        if (settingsModule != null) {
-            if (settingsBackRect.contains(mouseX, mouseY) && mouseButton == 0) {
-                closeModuleSettings();
-                return;
-            }
-            if (settingsModuleToggleRect.contains(mouseX, mouseY) && mouseButton == 0) {
-                if (settingsModule.canBeEnabled()) {
-                    settingsModule.toggle(ModuleTransitionSource.GUI);
-                    saveClientState();
-                }
-                return;
-            }
+        if (settingsOpen) {
+            settingsOpen = false;
+            return;
         }
 
         for (CategoryHitbox hitbox : categoryHitboxes) {
@@ -870,6 +932,7 @@ public final class ClickGui extends GuiScreen {
             searchAnchor = 0;
             settingsModule = null;
             scroll = 0;
+            scrollTarget = scrollPosition = 0;
             categoryAnimation = 0.0F;
             return;
         }
@@ -883,9 +946,8 @@ public final class ClickGui extends GuiScreen {
         for (int i = actionHitboxes.size() - 1; i >= 0; i--) {
             ActionHitbox hitbox = actionHitboxes.get(i);
             if (!hitbox.isVisibleAt(mouseX, mouseY) || mouseButton != 0) continue;
-            if (hitbox.action == ActionType.BIND) bindingModule = hitbox.module;
-            else if (hitbox.action == ActionType.BIND_MODE) hitbox.module.cycleBindMode();
-            else hitbox.module.resetToDefaults();
+            if (hitbox.action == ActionType.CLEAR_BIND) clearBind(hitbox.module);
+            else beginBind(hitbox.module);
             saveClientState();
             return;
         }
@@ -907,12 +969,14 @@ public final class ClickGui extends GuiScreen {
                 favoriteDragging = false;
                 return;
             }
+            Rect toggleHitbox = new Rect(hitbox.row.right() - 46, hitbox.row.y + 10, 28, 22);
             boolean expandClick = mouseButton == 1
-                    || (mouseButton == 0 && hitbox.expand.contains(mouseX, mouseY));
+                    || (mouseButton == 0 && !toggleHitbox.contains(mouseX, mouseY));
             if (expandClick) {
-                settingsModule = hitbox.module;
-                scroll = 0;
-                maxScroll = 0;
+                settingsModule = settingsModule == hitbox.module ? null : hitbox.module;
+                activeSlider = null;
+                activeColor = null;
+                bindingModule = null;
                 searchFocused = false;
             } else if (mouseButton == 0 && hitbox.module.canBeEnabled()) {
                 hitbox.module.toggle(ModuleTransitionSource.GUI);
@@ -930,6 +994,7 @@ public final class ClickGui extends GuiScreen {
 
     private void handleSettingClick(SettingHitbox hitbox, int mouseX, int mouseY, int mouseButton) {
         Setting setting = hitbox.setting;
+        scrollTarget = scrollPosition = scroll;
         if (setting instanceof ColorSetting color && mouseButton == 0) {
             activeSlider = null;
             activeColor = color;
@@ -970,7 +1035,8 @@ public final class ClickGui extends GuiScreen {
 
     @Override
     public void mouseReleased(int mouseX, int mouseY, int state) {
-        if (state == 0 && favoriteDragging && favoriteDragModule != null
+        if (state != 0) return;
+        if (favoriteDragging && favoriteDragModule != null
                 && favoriteDropIndex >= 0) {
             reorderFavorite(favoriteDragModule, favoriteDropIndex);
         }
@@ -978,6 +1044,7 @@ public final class ClickGui extends GuiScreen {
         favoriteDropIndex = -1;
         favoriteDragging = false;
         draggingWindow = false;
+        draggingScrollbar = false;
         activeSlider = null;
         activeSliderRow = Rect.EMPTY;
         activeColor = null;
@@ -993,29 +1060,31 @@ public final class ClickGui extends GuiScreen {
         if (wheel == 0) return;
         int mouseX = Mouse.getEventX() * width / mc.displayWidth;
         int mouseY = height - Mouse.getEventY() * height / mc.displayHeight - 1;
-        if (contentClip.contains(mouseX, mouseY)) {
-            scroll = clamp(scroll + (wheel < 0 ? 24 : -24), 0, maxScroll);
+        if (!settingsOpen && activeSlider == null && activeColor == null && !draggingScrollbar && contentClip.contains(mouseX, mouseY)) {
+            scrollTarget = Math.max(0, Math.min(maxScroll, scrollTarget + (wheel < 0 ? 28 : -28)));
         }
     }
 
     @Override
     public void keyTyped(char typedChar, int keyCode) {
+        updateBindCapture();
         if (bindingModule != null) {
             if (keyCode == Keyboard.KEY_ESCAPE) {
                 bindingModule = null;
-                return;
+            } else if (keyCode == Keyboard.KEY_DELETE || keyCode == Keyboard.KEY_BACK) {
+                clearBind(bindingModule);
+            } else if (keyCode > Keyboard.KEY_NONE && keyCode < Keyboard.KEYBOARD_SIZE
+                    && (!isCtrlKeyDown() || keyCode == Keyboard.KEY_LCONTROL || keyCode == Keyboard.KEY_RCONTROL)
+                    && (!isAltKeyDown() || keyCode == Keyboard.KEY_LMENU || keyCode == Keyboard.KEY_RMENU)
+                    && keyCode != Keyboard.KEY_F11 && keyCode != Keyboard.KEY_F3
+                    && (bindingModule == clickGuiModule() || clickGuiModule() == null
+                    || keyCode != clickGuiModule().getKeycode())) {
+                finishBind(keyCode);
             }
-            if (keyCode == Keyboard.KEY_DELETE || keyCode == Keyboard.KEY_BACK) {
-                bindingModule.setBind(bindingModule instanceof ClickGuiModule
-                        ? Keyboard.KEY_RETURN : Keyboard.KEY_NONE);
-            } else {
-                bindingModule.setBind(keyCode);
-            }
-            bindingModule = null;
-            saveClientState();
             return;
         }
         if (searchFocused) {
+            String previousQuery = searchQuery;
             boolean control = isCtrlKeyDown();
             boolean shift = isShiftKeyDown();
             if (control && keyCode == Keyboard.KEY_A) {
@@ -1063,12 +1132,16 @@ public final class ClickGui extends GuiScreen {
             } else if (!control && typedChar >= 32 && typedChar != 127) {
                 insertSearchText(String.valueOf(typedChar));
             }
-            scroll = 0;
-            categoryAnimation = 0.0F;
+            if (!searchQuery.equals(previousQuery)) {
+                scroll = 0;
+                scrollTarget = scrollPosition = 0;
+                categoryAnimation = 0.0F;
+            }
             return;
         }
         if (keyCode == Keyboard.KEY_ESCAPE) {
-            if (settingsModule != null) closeModuleSettings();
+            if (settingsOpen) settingsOpen = false;
+            else if (settingsModule != null) closeModuleSettings();
             else mc.displayGuiScreen(null);
         }
     }
@@ -1213,11 +1286,12 @@ public final class ClickGui extends GuiScreen {
     }
 
     private int animatedModuleHeight(Module module) {
-        return MODULE_HEADER_HEIGHT;
+        return MODULE_HEADER_HEIGHT + Math.round((expandedHeight(module) + 3)
+                * expansion.getOrDefault(module, 0.0F));
     }
 
     private int expandedHeight(Module module) {
-        int height = 30;
+        int height = 7;
         for (Setting setting : module.getSettings()) {
             if (setting.isVisible() && !(setting instanceof DescriptionSetting)) height += settingHeight(setting);
         }
@@ -1232,17 +1306,28 @@ public final class ClickGui extends GuiScreen {
     }
 
     private void drawScrollbar() {
-        Rect viewportRect = settingsModule == null ? contentClip : settingsViewport;
+        Rect viewportRect = contentClip;
         int x = viewportRect.right() - 3;
         int viewport = viewportRect.height - 8;
         int content = viewport + maxScroll;
         int thumb = Math.max(18, viewport * viewport / Math.max(1, content));
         int travel = Math.max(1, viewport - thumb);
         int y = viewportRect.y + 4 + Math.round(travel * (scroll / (float) maxScroll));
+        scrollbarThumb = new Rect(x - 2, y, 5, thumb);
+        scrollbarTrack = new Rect(x - 4, viewportRect.y + 4, 9, viewport);
         RenderUtils.drawRoundedRect(x, viewportRect.y + 4, x + 2,
                 viewportRect.bottom() - 4, 1, UiTokens.Color.TRACK_INSET);
         RenderUtils.drawRoundedRect(x - 1, y, x + 2, y + thumb,
                 1.5F, UiTokens.Color.TEXT_SECONDARY);
+    }
+
+    private void updateDraggedScrollbar(int mouseY) {
+        if (!draggingScrollbar || !Mouse.isButtonDown(0) || maxScroll <= 0) return;
+        int travel = scrollbarTrack.height - scrollbarThumb.height;
+        float progress = clamp01((mouseY - scrollbarTrack.y - scrollbarGrabOffset)
+                / (float) Math.max(1, travel));
+        scrollTarget = scrollPosition = progress * maxScroll;
+        scroll = Math.round(scrollPosition);
     }
 
     private void updateDraggedWindow(int mouseX, int mouseY) {
@@ -1258,6 +1343,7 @@ public final class ClickGui extends GuiScreen {
         settingsBackRect = Rect.EMPTY;
         settingsModuleToggleRect = Rect.EMPTY;
         scroll = 0;
+        scrollTarget = scrollPosition = 0;
         maxScroll = 0;
         bindingModule = null;
         activeSlider = null;
@@ -1346,6 +1432,7 @@ public final class ClickGui extends GuiScreen {
 
     @Override
     public void onGuiClosed() {
+        bindingModule = null;
         Keyboard.enableRepeatEvents(false);
         saveClientState();
         Module clickGui = clickGuiModule();
@@ -1362,11 +1449,12 @@ public final class ClickGui extends GuiScreen {
     }
 
     private static boolean favoritesEnabled() {
-        return true;
+        return Veyra.moduleManager != null && Veyra.moduleManager.getModules().stream()
+                .anyMatch(Module::isFavorite);
     }
 
     public static boolean isFavoritesCategoryEnabled() {
-        return true;
+        return favoritesEnabled();
     }
 
     public static void setFavoritesCategoryEnabled(boolean enabled) {
@@ -1385,7 +1473,7 @@ public final class ClickGui extends GuiScreen {
 
     private static String cleanLabel(String value) {
         if (value == null) return "Setting";
-        return value.replace("(New)", "").replace("(for bypassing)", "")
+        return value.replace("Experimental freeze", "Freeze").replace("(New)", "").replace("(for bypassing)", "")
                 .replace("recieve", "receive").replace("AutoDisable", "Auto disable")
                 .replace("GroundSpoof", "Ground spoof").replaceAll("\\s+", " ")
                 .replaceAll(":$", "").trim();
@@ -1408,15 +1496,6 @@ public final class ClickGui extends GuiScreen {
                 .replace("CAPITAL", "Caps Lock").replace("RETURN", "Enter");
     }
 
-    private static String bindModeLabel(Module module) {
-        if (module.isBindOnly()) return "Bind only";
-        return switch (module.getBindMode()) {
-            case TOGGLE -> "Toggle";
-            case HOLD -> "Hold";
-            case PRESS -> "Press";
-        };
-    }
-
     private static String formatNumber(double value) {
         if (Math.abs(value - Math.rint(value)) < 0.0001D) return String.valueOf((long) Math.rint(value));
         String text = String.format(Locale.ROOT, "%.2f", value);
@@ -1429,7 +1508,7 @@ public final class ClickGui extends GuiScreen {
     }
 
     private static String ellipsize(String value, float maxWidth, VeyraFont font, float height) {
-        if (value == null) return "";
+        if (value == null || maxWidth < font.width("…", height)) return "";
         if (font.width(value, height) <= maxWidth) return value;
         String result = value;
         while (!result.isEmpty() && font.width(result + "…", height) > maxWidth) {
@@ -1481,7 +1560,7 @@ public final class ClickGui extends GuiScreen {
         return rect.height > 0 && rect.bottom() > clip.y && rect.y < clip.bottom();
     }
 
-    private enum ActionType { BIND, BIND_MODE, RESET }
+    private enum ActionType { BIND, CLEAR_BIND }
     private enum ColorDragMode { SATURATION_VALUE, HUE }
     private static final class CategoryHitbox {
         private final Module.ModuleCategory category;

@@ -220,8 +220,8 @@ public final class ArrayListModule extends Module {
         if (clampToScreen) {
             x = clamp(x, 2, Math.max(2, resolution.getScaledWidth() - maximumWidth - 2));
             y = clamp(y, 2, Math.max(2, resolution.getScaledHeight() - totalHeight - 2));
-            hudX = x;
-            hudY = y;
+            // Clamp this frame's drawing only. A temporary smaller viewport must
+            // not overwrite the user's persisted position.
         }
 
         boolean alignRight = resolveRightAlignment(x, maximumWidth, resolution.getScaledWidth());

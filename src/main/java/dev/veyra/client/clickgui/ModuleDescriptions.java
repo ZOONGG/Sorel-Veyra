@@ -13,7 +13,6 @@ public final class ModuleDescriptions {
         COPY.put("AntiVoid", "Helps prevent accidental falls into the void.");
         COPY.put("ArrayList", "Shows enabled modules with configurable colors, layout, animation, and filters.");
         COPY.put("AutoBlock", "Blocks predicted hits using BlockHit, Predictive, or Blatant behavior.");
-        COPY.put("AutoBlock In", "Builds a compact protective shell around you.");
         COPY.put("AutoClicker", "Automates primary clicks with configurable timing.");
         COPY.put("AutoDodge", "Reports scoreboard teams once after joining a world.");
         COPY.put("AutoFish", "Retracts a fishing rod on a bite and recasts it.");

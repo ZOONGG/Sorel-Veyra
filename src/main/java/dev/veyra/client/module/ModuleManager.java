@@ -45,7 +45,6 @@ public class ModuleManager {
       addModule(new AutoTool());
       addModule(new SpeedMine());
       addModule(new SafeWalk());
-      addModule(new AutoBlockIn());
       addModule(new AutoFish());
       addModule(new VoidClutch());
       addModule(new BedNuker());

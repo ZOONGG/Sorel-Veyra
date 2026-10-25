@@ -11,6 +11,9 @@ import org.lwjgl.input.Mouse;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
+import java.util.IdentityHashMap;
+import java.util.HashMap;
 
 /** Dedicated blacklist/whitelist editor for the enabled-module overlay. */
 public final class ArrayListVisibilityScreen extends GuiScreen {
@@ -18,6 +21,13 @@ public final class ArrayListVisibilityScreen extends GuiScreen {
     private final List<EntryHitbox> hitboxes = new ArrayList<>();
     private final List<Module> modules = new ArrayList<>();
     private int scroll;
+    private float targetScroll;
+    private float visualScroll;
+    private long lastFrame;
+    private final Map<Module, Float> selectedMotion = new IdentityHashMap<>();
+    private final Map<Module, Float> hoverMotion = new IdentityHashMap<>();
+    private final Map<String, Float> footerHover = new HashMap<>();
+    private float frameDelta;
     private int maxScroll;
     private Rect clearButton = Rect.EMPTY;
     private Rect selectButton = Rect.EMPTY;
@@ -39,16 +49,22 @@ public final class ArrayListVisibilityScreen extends GuiScreen {
 
     @Override
     public void drawScreen(int mouseX, int mouseY, float partialTicks) {
+        long now = System.nanoTime();
+        float delta = lastFrame == 0 ? 0 : Math.min(0.05F, (now - lastFrame) / 1_000_000_000.0F);
+        lastFrame = now;
+        frameDelta = delta;
+        targetScroll = Math.max(0, Math.min(maxScroll, targetScroll));
+        visualScroll = FrameMotion.expApproach(visualScroll, targetScroll, 20, delta);
+        scroll = Math.round(visualScroll);
         drawGradientRect(0, 0, width, height, Theme.BACKDROP_TOP, Theme.BACKDROP_BOTTOM);
-        int panelWidth = Math.min(520, Math.max(350, width - 16));
-        int panelHeight = Math.min(360, Math.max(270, height - 16));
+        int panelWidth = Math.min(520, Math.max(200, width - 16));
+        int panelHeight = Math.min(360, Math.max(180, height - 16));
         int panelLeft = (width - panelWidth) / 2;
         int panelTop = (height - panelHeight) / 2;
         int panelRight = panelLeft + panelWidth;
         int panelBottom = panelTop + panelHeight;
-        RenderUtils.drawRoundedRect(panelLeft, panelTop, panelRight, panelBottom, 9, Theme.WINDOW);
-        RenderUtils.drawRoundedOutline(panelLeft, panelTop, panelRight, panelBottom,
-                10, 0.8F, Theme.BORDER_INT);
+        UiDraw.surface(panelLeft, panelTop, panelRight, panelBottom, UiTokens.Radius.WINDOW,
+                Theme.WINDOW, Theme.BORDER_INT, 2);
 
         VeyraFonts.semibold().drawPlain("ArrayList modules", panelLeft + 16, panelTop + 13,
                 Theme.TEXT_PRIMARY_INT, 11.5F);
@@ -83,15 +99,19 @@ public final class ArrayListVisibilityScreen extends GuiScreen {
             Module module = modules.get(index);
             boolean selected = ArrayListModule.isFilterMember(module);
             boolean hovered = rect.contains(mouseX, mouseY) && listViewport.contains(mouseX, mouseY);
-            int accent = Theme.moduleAccent(module.getName(), module.moduleCategory().ordinal());
-            int fill = selected ? UiDraw.mix(Theme.SURFACE_INT, accent, hovered ? 0.20F : 0.13F)
-                    : hovered ? Theme.SURFACE_HOVER_INT : Theme.SURFACE_INT;
-            RenderUtils.drawRoundedRect(rect.x, rect.y, rect.right(), rect.bottom(), 5, fill);
-            RenderUtils.drawRoundedOutline(rect.x, rect.y, rect.right(), rect.bottom(), 5,
-                    0.7F, selected ? withAlpha(accent, 180) : Theme.BORDER_SOFT);
-            String label = ellipsize(module.getName(), columnWidth - 20);
-            VeyraFonts.semibold().drawPlain(label, rect.x + 10, rect.y + 6,
-                    selected ? Theme.TEXT_PRIMARY_INT : Theme.TEXT_SECONDARY_INT, 8.0F);
+            int accent = Theme.getMainColor().getRGB();
+            float selection = FrameMotion.expApproach(selectedMotion.getOrDefault(module, selected ? 1.0F : 0.0F),
+                    selected ? 1 : 0, UiTokens.Motion.TOGGLE_SPEED, delta);
+            float hover = FrameMotion.expApproach(hoverMotion.getOrDefault(module, 0.0F),
+                    hovered ? 1 : 0, UiTokens.Motion.HOVER_SPEED, delta);
+            selectedMotion.put(module, selection);
+            hoverMotion.put(module, hover);
+            UiDraw.button(rect.x, rect.y, rect.right(), rect.bottom(), hover, selection, accent);
+            String label = ellipsize(module.getName(), columnWidth - 42);
+            VeyraFonts.semibold().drawPlain(label, rect.x + 8, rect.y + 6,
+                    Theme.TEXT_SECONDARY_INT, 8.0F);
+            UiDraw.toggle(rect.right() - 27, rect.y + 5, rect.right() - 8, rect.y + 15,
+                    selection, hovered, false, accent);
             hitboxes.add(new EntryHitbox(module, rect));
         }
         disableScissor();
@@ -137,7 +157,11 @@ public final class ArrayListVisibilityScreen extends GuiScreen {
         super.handleMouseInput();
         int wheel = Mouse.getEventDWheel();
         if (wheel != 0) {
-            scroll = clamp(scroll + (wheel < 0 ? 31 : -31), 0, maxScroll);
+            int mouseX = Mouse.getEventX() * width / mc.displayWidth;
+            int mouseY = height - Mouse.getEventY() * height / mc.displayHeight - 1;
+            if (listViewport.contains(mouseX, mouseY)) {
+                targetScroll = Math.max(0, Math.min(maxScroll, targetScroll + (wheel < 0 ? 28 : -28)));
+            }
         }
     }
 
@@ -152,13 +176,13 @@ public final class ArrayListVisibilityScreen extends GuiScreen {
     }
 
     private void recalculateScroll() {
-        int windowWidth = Math.min(520, Math.max(350, width - 16));
+        int windowWidth = Math.min(520, Math.max(200, width - 16));
         int panelWidth = windowWidth - 28;
         int columns = Math.max(1, Math.min(3, panelWidth / 170));
         int rows = (modules.size() + columns - 1) / columns;
         int contentHeight = rows * ROW_HEIGHT;
         int viewportHeight = listViewport.height > 0 ? listViewport.height
-                : Math.min(360, Math.max(270, height - 16)) - 94;
+                : Math.min(360, Math.max(180, height - 16)) - 94;
         maxScroll = Math.max(0, contentHeight - Math.max(1, viewportHeight));
         scroll = clamp(scroll, 0, maxScroll);
     }
@@ -200,8 +224,11 @@ public final class ArrayListVisibilityScreen extends GuiScreen {
     private void drawFooterButton(Rect rect, String label, int mouseX, int mouseY,
                                   boolean primary) {
         boolean hovered = rect.contains(mouseX, mouseY);
-        int accent = Theme.moduleAccent(label, 4);
-        UiDraw.button(rect.x, rect.y, rect.right(), rect.bottom(), hovered, primary, accent);
+        int accent = Theme.getMainColor().getRGB();
+        float progress = FrameMotion.expApproach(footerHover.getOrDefault(label, 0.0F),
+                hovered ? 1 : 0, UiTokens.Motion.HOVER_SPEED, frameDelta);
+        footerHover.put(label, progress);
+        UiDraw.button(rect.x, rect.y, rect.right(), rect.bottom(), progress, primary ? 1 : 0, accent);
         float textWidth = VeyraFonts.semibold().width(label, 8.0F);
         VeyraFonts.semibold().drawPlain(label, rect.x + (rect.width - textWidth) / 2.0F,
                 rect.y + 7, primary ? Theme.TEXT_PRIMARY_INT : Theme.TEXT_SECONDARY_INT, 8.0F);

@@ -52,8 +52,6 @@ public final class SafeWalk extends Module {
     private final DoubleSliderSetting unsneakDelayMs;
     private final ComboSetting<SelectBlocks> selectBlocks;
     private final TickSetting randomize;
-    private final TickSetting sneakOnJump;
-    private final TickSetting avoidDoubleSneaking;
     private final SliderSetting twoBlockChance;
     private final TickSetting requireSneakKey;
     private final TickSetting holdingBlocks;
@@ -71,6 +69,7 @@ public final class SafeWalk extends Module {
     private int previousBlockCount;
     private boolean placementSignalled;
     private long lastSkipAutoPlaceMs;
+    private int leasedSneakKey = Integer.MIN_VALUE;
 
     public SafeWalk() {
         super("BridgeAssist", ModuleCategory.Player, 0);
@@ -80,8 +79,6 @@ public final class SafeWalk extends Module {
                 "Unsneak delay ms", 25.0D, 55.0D, 0.0D, 250.0D, 5.0D));
         registerSetting(selectBlocks = new ComboSetting<>("Select blocks", SelectBlocks.No));
         registerSetting(randomize = new TickSetting("Randomize", true));
-        registerSetting(sneakOnJump = new TickSetting("Sneak on jump", false));
-        registerSetting(avoidDoubleSneaking = new TickSetting("Avoid double-sneaking", true));
         registerSetting(twoBlockChance = new SliderSetting(
                 "No-shift chance %", 40.0D, 0.0D, 100.0D, 5.0D));
         registerSetting(requireSneakKey = new TickSetting("Sneak key pressed", false));
@@ -97,7 +94,7 @@ public final class SafeWalk extends Module {
         activeInstance = this;
         lastMovementGuardInvocationMs = 0L;
         MOVEMENT_GUARD_SCOPE.remove();
-        System.setProperty(ACTIVE_PROPERTY, Boolean.TRUE.toString());
+        System.clearProperty(ACTIVE_PROPERTY);
         System.clearProperty(SCOPE_THREAD_PROPERTY);
         System.clearProperty(LAST_GUARD_PROPERTY);
         setSuffix(null);
@@ -121,19 +118,19 @@ public final class SafeWalk extends Module {
     public void onTick(TickEvent.Pre event) {
         long nowMs = System.currentTimeMillis();
         boolean environmentValid = isEnvironmentValid();
-        // This is the non-negotiable safety layer. The moveEntity hook uses
-        // vanilla's own ledge clamp for every movement tick while the module
-        // is active, so a missed prediction can slow/stop but cannot drop us.
+        // The physical Sneak binding is an activation condition, not the
+        // synthetic key state leased by this module. Release cancels the cycle.
         boolean activationValid = environmentValid && prepareAndCheckConditions();
-        boolean valid = activationValid
-                || (environmentValid && engine.requiresSafetyContinuation());
+        boolean sneakCondition = !requireSneakKey.isToggled() || isSneakPhysicallyDown();
+        boolean valid = sneakCondition && (activationValid
+                || (environmentValid && engine.requiresSafetyContinuation()));
+        if (valid) System.setProperty(ACTIVE_PROPERTY, Boolean.TRUE.toString());
+        else System.clearProperty(ACTIVE_PROPERTY);
         MovementInput input = environmentValid ? mc.thePlayer.movementInput : null;
         boolean edgeReached = valid && mc.thePlayer.onGround && isEdgeReached(
                 input, edgeOffset(), BridgeEdgeProbe.STANDARD_MOTION_MARGIN);
         boolean emergencyEdgeReached = valid && mc.thePlayer.onGround && isEdgeReached(
                 input, 0.30D, BridgeEdgeProbe.EMERGENCY_MOTION_MARGIN);
-        boolean jumpNeedsSneak = valid && !mc.thePlayer.onGround
-                && sneakOnJump.isToggled() && lacksSupportBelowPlayer();
 
         BridgeAssistSettings settings = settings();
         if (valid && lastEdgeReached && !edgeReached && engine.ownsSneak()
@@ -145,8 +142,8 @@ public final class SafeWalk extends Module {
         boolean ownedBeforeTick = engine.ownsSneak();
         boolean assistedSneak = engine.tick(new BridgeAssistContext(
                 nowMs, valid, edgeReached, emergencyEdgeReached,
-                jumpNeedsSneak, isSneakPhysicallyDown()), settings);
-        setShift(assistedSneak);
+                isSneakPhysicallyDown()), settings);
+        setShift(assistedSneak, valid && requireSneakKey.isToggled());
         setSuffix(engine.fastPassArmed() ? "Skip AutoPlace" : null);
 
         if (!ownedBeforeTick && engine.ownsSneak()) placementSignalled = false;
@@ -233,8 +230,7 @@ public final class SafeWalk extends Module {
                     && ThreadLocalRandom.current().nextDouble(100.0D) < chance);
         }
         return new BridgeAssistSettings(sampledUnsneakDelayMs,
-                sneakOnJump.isToggled(), avoidDoubleSneaking.isToggled(),
-                sampledTwoBlockPass);
+                requireSneakKey.isToggled(), sampledTwoBlockPass);
     }
 
     /** Larger offsets permit more overhang, so sneak begins later and bridging is faster. */
@@ -273,25 +269,23 @@ public final class SafeWalk extends Module {
         return mc.theWorld.getCollidingBoundingBoxes(mc.thePlayer, supportProbe).isEmpty();
     }
 
-    private boolean lacksSupportBelowPlayer() {
-        AxisAlignedBB feet = mc.thePlayer.getEntityBoundingBox().offset(0.0D, -0.08D, 0.0D);
-        return mc.theWorld.getCollidingBoundingBoxes(mc.thePlayer, feet).isEmpty();
-    }
-
-    private void setShift(boolean assistedSneak) {
+    private void setShift(boolean assistedSneak, boolean controlsHeldSneak) {
         int keyCode = mc.gameSettings.keyBindSneak.getKeyCode();
-        if (assistedSneak) {
-            InputLeaseManager.set(INPUT_OWNER, keyCode, true, INPUT_PRIORITY);
+        if (leasedSneakKey != keyCode) releaseSneak();
+        if (assistedSneak || controlsHeldSneak) {
+            leasedSneakKey = keyCode;
+            InputLeaseManager.set(INPUT_OWNER, keyCode, assistedSneak, INPUT_PRIORITY);
         } else {
             // In inventories and containers the physical Shift key belongs to
             // shift-click. Restoring it as a gameplay binding would make the
             // player sneak behind the GUI and can leave the binding stuck.
-            InputLeaseManager.releaseOwner(INPUT_OWNER, mc.currentScreen == null);
+            releaseSneak();
         }
     }
 
     private void releaseSneak() {
-        InputLeaseManager.releaseOwner(INPUT_OWNER, mc.currentScreen == null);
+        InputLeaseManager.releaseOwner(INPUT_OWNER, mc.currentScreen == null && mc.inGameHasFocus);
+        leasedSneakKey = Integer.MIN_VALUE;
     }
 
     private boolean isSneakPhysicallyDown() {
@@ -314,7 +308,10 @@ public final class SafeWalk extends Module {
 
     /** Used only by the local-player moveEntity safety redirect. */
     public static boolean shouldHardClampMovement() {
-        return activeInstance != null || Boolean.getBoolean(ACTIVE_PROPERTY);
+        SafeWalk instance = activeInstance;
+        return Boolean.getBoolean(ACTIVE_PROPERTY) && (instance == null
+                || instance.isEnvironmentValid() && (!instance.requireSneakKey.isToggled()
+                || instance.isSneakPhysicallyDown()));
     }
 
     public static void enterMovementGuardScope() {
@@ -429,6 +426,7 @@ public final class SafeWalk extends Module {
     @SubscribeEvent
     public void onSkipAutoPlace(RenderWorldEvent event) {
         if (!engine.fastPassArmed() || !isEnvironmentValid()
+                || (requireSneakKey.isToggled() && !isSneakPhysicallyDown())
                 || !Mouse.isButtonDown(1)) return;
 
         ItemStack stack = mc.thePlayer.getHeldItem();

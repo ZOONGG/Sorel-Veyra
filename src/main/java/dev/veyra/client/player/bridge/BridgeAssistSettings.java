@@ -2,8 +2,7 @@ package dev.veyra.client.player.bridge;
 
 public record BridgeAssistSettings(
         long unsneakDelayMs,
-        boolean sneakOnJump,
-        boolean avoidDoubleSneaking,
+        boolean requireSneakKey,
         boolean adaptiveTwoBlockRhythm
 ) {
     public static final long MIN_SAFE_UNSNEAK_DELAY_MS = 0L;
@@ -14,11 +13,4 @@ public record BridgeAssistSettings(
         unsneakDelayMs = Math.max(MIN_SAFE_UNSNEAK_DELAY_MS, unsneakDelayMs);
     }
 
-    public BridgeAssistSettings(
-            long unsneakDelayMs,
-            boolean sneakOnJump,
-            boolean avoidDoubleSneaking
-    ) {
-        this(unsneakDelayMs, sneakOnJump, avoidDoubleSneaking, true);
-    }
 }

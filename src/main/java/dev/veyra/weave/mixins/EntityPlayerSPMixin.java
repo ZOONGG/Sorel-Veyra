@@ -46,6 +46,7 @@ public abstract class EntityPlayerSPMixin extends AbstractClientPlayer {
                     target = "Lnet/minecraft/util/MovementInput;updatePlayerMoveState()V",
                     shift = At.Shift.AFTER))
     private void veyra$afterMovementInput(CallbackInfo ci) {
+        dev.veyra.client.module.modules.movement.Sprint.updateVanillaSprintInput();
         veyra$skipVanillaSlowdown = false;
         if (isUsingItem() && !isRiding()) {
             SlowdownEvent event = new SlowdownEvent();

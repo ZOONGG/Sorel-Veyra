@@ -105,9 +105,11 @@ public abstract class Module {
    }
 
    public void keybind() {
-      boolean inputAllowed = mc.currentScreen == null && keycode != 0 && canBeEnabled();
+      boolean down = keycode != 0 && isBindDown(keycode);
+      boolean captured = dev.veyra.client.module.bind.CapturedBindInput.isSuppressed(keycode, down);
+      boolean inputAllowed = !captured && mc.currentScreen == null && keycode != 0 && canBeEnabled();
       BindAction action = inputAllowed
-              ? bindState.update(bindMode, isBindDown(keycode))
+              ? bindState.update(bindMode, down)
               : bindState.reset(bindMode);
       handleBindAction(action);
    }
@@ -119,7 +121,8 @@ public abstract class Module {
     */
    public void keybindEvent(int inputCode, boolean down) {
       if (inputCode != keycode || keycode == 0) return;
-      boolean inputAllowed = mc.currentScreen == null && canBeEnabled();
+      boolean captured = dev.veyra.client.module.bind.CapturedBindInput.isSuppressed(inputCode, down);
+      boolean inputAllowed = !captured && mc.currentScreen == null && canBeEnabled();
       BindAction action = inputAllowed
               ? bindState.update(bindMode, down)
               : bindState.reset(bindMode);
@@ -184,7 +187,8 @@ public abstract class Module {
          EventBus.unsubscribe(this);
          onDisable();
       }
-      if (shouldNotify && Veyra.notificationManager != null) {
+      if (shouldNotify && !(this instanceof dev.veyra.client.module.modules.client.ClickGuiModule)
+               && Veyra.notificationManager != null) {
          Veyra.notificationManager.postModuleState(moduleName, enabled);
       }
    }

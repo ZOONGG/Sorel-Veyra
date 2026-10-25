@@ -9,13 +9,13 @@ import dev.veyra.client.module.modules.client.ArrayListModule;
 import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.IOException;
-import java.io.PrintWriter;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Scanner;
 
 public class ClientConfig {
    private final File configFile;
+   private boolean applyingConfig;
    private final File weaveDir = new File(System.getProperty("user.home"), ".weave");
    private final File configDir = new File(weaveDir, "veyra");;
    private final String fileName = "client.scfg";
@@ -38,7 +38,8 @@ public class ClientConfig {
       }
    }
 
-   public void saveConfig() {
+   public synchronized void saveConfig() {
+      if (applyingConfig) return;
       List<String> config = new ArrayList<>();
       config.add(clickGuiPosPrefix + getClickGuiPos());
       config.add(loadedConfigPrefix + Veyra.configManager.getConfig().getName());
@@ -47,19 +48,28 @@ public class ClientConfig {
       config.add(ArrayListModule.FILTER_PREFIX + ArrayListModule.serializeFilterMembers());
       config.add(favoritesCategoryPrefix + ClickGui.isFavoritesCategoryEnabled());
 
-      PrintWriter writer;
+      java.nio.file.Path destination = configFile.toPath();
+      java.nio.file.Path temporary = null;
       try {
-         writer = new PrintWriter(this.configFile);
-         for (String line : config) {
-            writer.println(line);
+         temporary = java.nio.file.Files.createTempFile(destination.getParent(), "client-", ".tmp");
+         java.nio.file.Files.write(temporary, config, java.nio.charset.StandardCharsets.UTF_8);
+         try {
+            java.nio.file.Files.move(temporary, destination, java.nio.file.StandardCopyOption.ATOMIC_MOVE,
+                    java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+         } catch (java.nio.file.AtomicMoveNotSupportedException unsupported) {
+            java.nio.file.Files.move(temporary, destination, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
          }
-         writer.close();
       } catch (IOException e) {
          e.printStackTrace();
+      } finally {
+         if (temporary != null) try { java.nio.file.Files.deleteIfExists(temporary); }
+         catch (IOException ignored) { }
       }
    }
 
-   public void applyConfig(){
+   public synchronized void applyConfig(){
+      applyingConfig = true;
+      try {
       List<String> config = this.parseConfigFile();
       String legacyArrayListFilter = null;
 
@@ -90,6 +100,7 @@ public class ClientConfig {
          ArrayListModule.deserializeFilterMembers(legacyArrayListFilter);
          ArrayListModule.persistFilterMembers();
       }
+      } finally { applyingConfig = false; }
    }
 
    private List<String> parseConfigFile() {

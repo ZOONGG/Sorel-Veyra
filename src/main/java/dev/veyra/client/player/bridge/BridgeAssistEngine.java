@@ -12,14 +12,13 @@ public final class BridgeAssistEngine {
     private long releaseAtMs;
 
     public boolean tick(BridgeAssistContext context, BridgeAssistSettings settings) {
-        if (!context.valid()) {
+        if (!context.valid() || settings.requireSneakKey() && !context.physicalSneakDown()) {
             reset();
             return false;
         }
 
-        if (context.physicalSneakDown()) {
-            ownsSneak = false;
-            releasingAfterPlacement = false;
+        if (context.physicalSneakDown() && !settings.requireSneakKey()) {
+            reset();
             return false;
         }
 
@@ -39,25 +38,21 @@ public final class BridgeAssistEngine {
         }
 
         if (fastPassArmed) {
-            return tickFastPass(context, settings);
+            return tickFastPass(context);
         }
 
-        ownsSneak = context.edgeReached()
-                || (settings.sneakOnJump() && context.jumpNeedsSneak());
+        ownsSneak = context.edgeReached();
         return ownsSneak;
     }
 
-    private boolean tickFastPass(
-            BridgeAssistContext context,
-            BridgeAssistSettings settings
-    ) {
+    private boolean tickFastPass(BridgeAssistContext context) {
         if (context.edgeReached()) fastPassSawEdge = true;
 
         if (fastPassSawEdge && !context.edgeReached()) {
             fastPassArmed = false;
             fastPassSawEdge = false;
         }
-        ownsSneak = settings.sneakOnJump() && context.jumpNeedsSneak();
+        ownsSneak = false;
         return ownsSneak;
     }
 

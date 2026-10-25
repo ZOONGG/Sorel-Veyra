@@ -171,14 +171,13 @@
   - Edge offset
   - Unsneak delay
   - Randomize
-  - Sneak on jump
-  - Avoid double-sneaking
+  - No-shift chance
   - Select blocks: Never, On depletion, Always
   - Conditions: sneak key pressed, holding blocks, looking down, not moving forward
 - Edge detection uses the projected player bounding box and movement direction rather than only the block under the player's center.
 - A larger edge offset permits later sneaking and faster bridging.
 - Unsneak timing is based on successful block placement when available, with a bounded timer fallback.
-- Avoid double-sneaking prevents two sneak cycles for one diagonal placement.
+- Sneak key pressed reads the current physical Minecraft Sneak binding; releasing it cancels the assist cycle and restores vanilla input.
 - Disabling Bridge Assist always restores the physical sneak state.
 - Safety fallback must prevent falling without applying sneak slowdown throughout the entire traversal of a supported block.
 
@@ -287,7 +286,7 @@
 - [ ] Blatant mode contains Lag settings and never flushes packets owned by Blink or FakeLag.
 - [ ] Disabling AutoBlock restores physical use-item input.
 - [ ] Bridge Assist releases sneak after successful placement and does not remain slowed over supported blocks.
-- [ ] Diagonal bridging does not trigger duplicate sneak cycles when Avoid double-sneaking is enabled.
+- [ ] Sneak key pressed works with remapped keyboard and mouse bindings and releases module-owned input on release or disable.
 - [ ] Fast Place respects configured CPS and activation delay.
 - [ ] Auto Rod completes select, throw, retract, and slot restoration flows for Press and Hold usage.
 - [ ] No Use Delay affects post-consumption delay without changing No Slow, No Hit Delay, or Fast Place behavior.

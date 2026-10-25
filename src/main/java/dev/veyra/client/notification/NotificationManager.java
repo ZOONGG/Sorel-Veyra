@@ -1,15 +1,12 @@
 package dev.veyra.client.notification;
 
-import dev.veyra.client.clickgui.UiTokens;
 import dev.veyra.client.clickgui.FrameMotion;
-import dev.veyra.client.clickgui.font.VeyraFont;
-import dev.veyra.client.clickgui.font.VeyraFonts;
 import dev.veyra.client.module.modules.client.ClickGuiModule;
 import dev.veyra.client.utils.player.PlayerUtils;
-import dev.veyra.client.utils.render.RenderUtils;
 import net.minecraft.client.Minecraft;
-import net.weavemc.api.event.RenderGameOverlayEvent;
-import net.weavemc.api.event.SubscribeEvent;
+import net.minecraft.client.gui.ScaledResolution;
+import org.lwjgl.opengl.GL11;
+import org.lwjgl.opengl.GL20;
 
 import java.util.HashMap;
 import java.util.HashSet;
@@ -19,13 +16,12 @@ import java.util.Map;
 import java.util.Set;
 
 public final class NotificationManager {
-    private static final long ENTER_MS = 340L;
-    private static final long HOLD_MS = 1_500L;
-    private static final long EXIT_MS = 300L;
+    private static final long ENTER_MS = NotificationToast.ENTER_MS;
+    private static final long HOLD_MS = NotificationToast.HOLD_MS;
+    private static final long EXIT_MS = NotificationToast.EXIT_MS;
     private static final long LIFETIME_MS = ENTER_MS + HOLD_MS + EXIT_MS;
-    private static final int CARD_HEIGHT = 30;
+    private static final int CARD_HEIGHT = NotificationToast.CARD_HEIGHT;
     private static final int CARD_GAP = 6;
-    private static final float LEFT_MARGIN = 10.0F;
     private static final float TOP_MARGIN = 10.0F;
 
     private final Minecraft mc = Minecraft.getMinecraft();
@@ -38,8 +34,7 @@ public final class NotificationManager {
         queue.post(moduleName, enabled, System.nanoTime() / 1_000_000L);
     }
 
-    @SubscribeEvent
-    public void onRender(RenderGameOverlayEvent.Post event) {
+    public void renderFrame() {
         if (!ClickGuiModule.notificationsEnabled()) {
             queue.clear();
             animatedRows.clear();
@@ -64,54 +59,36 @@ public final class NotificationManager {
                 (nowNanos - lastFrameNanos) / 1_000_000_000.0F));
         lastFrameNanos = nowNanos;
 
-        Set<String> visibleKeys = new HashSet<>();
-        for (int index = 0; index < entries.size(); index++) {
-            NotificationQueue.Entry entry = entries.get(index);
-            String key = entry.moduleName().toLowerCase(Locale.ROOT);
-            visibleKeys.add(key);
-            float targetY = TOP_MARGIN + index * (CARD_HEIGHT + CARD_GAP);
-            float currentY = animatedRows.getOrDefault(key, targetY);
-            currentY = FrameMotion.expApproach(currentY, targetY, 22.0F, deltaSeconds);
-            animatedRows.put(key, currentY);
-            render(entry, currentY, nowMs);
+        int matrixMode = GL11.glGetInteger(GL11.GL_MATRIX_MODE);
+        int program = GL11.glGetInteger(GL20.GL_CURRENT_PROGRAM);
+        GL11.glPushAttrib(GL11.GL_ENABLE_BIT | GL11.GL_VIEWPORT_BIT | GL11.GL_COLOR_BUFFER_BIT);
+        GL20.glUseProgram(0);
+        GL11.glDisable(GL11.GL_DEPTH_TEST);
+        GL11.glDisable(GL11.GL_STENCIL_TEST);
+        GL11.glDisable(GL11.GL_SCISSOR_TEST);
+        GL11.glViewport(0, 0, mc.displayWidth, mc.displayHeight);
+        ScaledResolution resolution = new ScaledResolution(mc);
+        GL11.glMatrixMode(GL11.GL_PROJECTION); GL11.glPushMatrix(); GL11.glLoadIdentity();
+        GL11.glOrtho(0, resolution.getScaledWidth(), resolution.getScaledHeight(), 0, -1, 1);
+        GL11.glMatrixMode(GL11.GL_MODELVIEW); GL11.glPushMatrix(); GL11.glLoadIdentity();
+        try {
+            Set<String> visibleKeys = new HashSet<>();
+            for (int index = 0; index < entries.size(); index++) {
+                NotificationQueue.Entry entry = entries.get(index);
+                String key = entry.moduleName().toLowerCase(Locale.ROOT);
+                visibleKeys.add(key);
+                float targetY = TOP_MARGIN + index * (CARD_HEIGHT + CARD_GAP);
+                float currentY = animatedRows.getOrDefault(key, targetY);
+                currentY = FrameMotion.expApproach(currentY, targetY, 12.0F, deltaSeconds);
+                animatedRows.put(key, currentY);
+                NotificationToast.draw(entry, currentY, nowMs);
+            }
+            animatedRows.keySet().removeIf(key -> !visibleKeys.contains(key));
+        } finally {
+            GL11.glMatrixMode(GL11.GL_MODELVIEW); GL11.glPopMatrix();
+            GL11.glMatrixMode(GL11.GL_PROJECTION); GL11.glPopMatrix();
+            GL11.glMatrixMode(matrixMode); GL11.glPopAttrib(); GL20.glUseProgram(program);
         }
-        animatedRows.keySet().removeIf(key -> !visibleKeys.contains(key));
     }
 
-    private void render(NotificationQueue.Entry entry, float y, long nowMs) {
-        long ageMs = Math.max(0L, nowMs - entry.startedAtMs());
-        float visibility = NotificationMotion.visibility(
-                ageMs, ENTER_MS, HOLD_MS, EXIT_MS);
-        int alpha = Math.round(255.0F * visibility);
-
-        VeyraFont regular = VeyraFonts.regular();
-        VeyraFont semibold = VeyraFonts.semibold();
-        String state = entry.enabled() ? "ON" : "OFF";
-        float nameWidth = semibold.width(entry.moduleName(), 9.2F);
-        float stateWidth = semibold.width(state, 8.2F);
-        int width = Math.max(148, Math.round(nameWidth + stateWidth + 42.0F));
-        float x = LEFT_MARGIN - (1.0F - visibility) * (width + LEFT_MARGIN + 2.0F);
-
-        int accent = entry.enabled() ? UiTokens.Color.SUCCESS : UiTokens.Color.DANGER;
-        int background = withAlpha(UiTokens.Color.PANEL, Math.round(238.0F * visibility));
-        int border = withAlpha(UiTokens.Color.BORDER, Math.round(205.0F * visibility));
-        int text = withAlpha(UiTokens.Color.TEXT_PRIMARY, alpha);
-        int secondary = withAlpha(UiTokens.Color.TEXT_SECONDARY, alpha);
-        int accentVisible = withAlpha(accent, alpha);
-
-        RenderUtils.drawRoundedRect(x, y, x + width, y + CARD_HEIGHT,
-                UiTokens.Radius.MD, background);
-        RenderUtils.drawRoundedOutline(x, y, x + width, y + CARD_HEIGHT,
-                UiTokens.Radius.MD, 0.8F, border);
-        RenderUtils.drawRoundedRect(x + 8.0F, y + 8.0F, x + 12.0F, y + 22.0F,
-                2.0F, accentVisible);
-
-        semibold.drawPlain(entry.moduleName(), x + 19.0F, y + 9.5F, text, 9.2F);
-        regular.drawPlain(state, x + width - stateWidth - 10.0F, y + 10.0F,
-                entry.enabled() ? accentVisible : secondary, 8.2F);
-    }
-
-    private static int withAlpha(int color, int alpha) {
-        return Math.max(0, Math.min(255, alpha)) << 24 | color & 0x00FFFFFF;
-    }
 }
