@@ -24,11 +24,11 @@ modules behave identically or work on every server.
 | Area | Stormy | Veyra |
 | --- | --- | --- |
 | Retained baseline | AutoClicker, AimAssist, Reach, Velocity, Backtrack, movement modules, ESP, inventory tools | These module families remain registered; `Enter` still opens ClickGUI. |
-| Interface and configuration | Stormy GUI and identity | Redesigned GUI, search, favorites, themes, descriptions, bind modes and separate `.weave/veyra` configuration. |
+| Interface and configuration | Stormy GUI and identity | Redesigned GUI, search, favorites, themes, descriptions, compact header binds and separate `.weave/veyra` configuration. |
 | Player tools | No SpeedMine or Pearl → Fireball macro in the module registry | SpeedMine scales local block-breaking progress from 1.00 to 2.50 without changing the game clock. VoidClutch provides the bind-only Pearl → Fireball sequence described below. |
 | Timer | Speed 0.50–2.50, updated on ticks; reset in ClickGUI | Speed 0.00–2.50, updated every frame; 0.00 pauses client ticks while GUI and control binds remain serviced. Strafe-only gating and clock ownership/restore logic were reworked. `TimerSpeedPolicy` is internal code, not a separate module. |
-| Other additions | Original module set | JumpReset, TargetFilter, NoJumpDelay, AntiAFK, AutoTool, AutoBlockIn, AutoFish, NoUseDelay, BedESP, BedPlates, MurderFinder and Freecam are registered. |
-| Changed availability | AutoPlace registered | AutoPlace is no longer registered. SafeWalk has bridge-assist logic and AutoBlockIn is available; these are not a claim of identical AutoPlace behavior. Legacy Clutch is also unregistered. |
+| Other additions | Original module set | JumpReset, TargetFilter, NoJumpDelay, AntiAFK, AutoTool, AutoFish, NoUseDelay, BedESP, BedPlates, MurderFinder and Freecam are registered. |
+| Changed availability | AutoPlace registered | AutoPlace is no longer registered. SafeWalk has bridge-assist logic. AutoBlockIn is no longer available; old configurations remain compatible. Legacy Clutch is also unregistered. |
 
 **Player: Pearl → Fireball.** Assign a press bind to **VoidClutch** and keep an
 Ender Pearl and a fire charge in the hotbar. It aims fully upward over about
@@ -74,7 +74,7 @@ Use JDK 17 and the included Gradle wrapper:
 .\gradlew.bat clean build
 ```
 
-The artifact is written to `build/libs/Veyra-1.0.1.jar`.
+The artifact is written to `build/libs/Veyra-1.0.2.jar`.
 `build` includes the JUnit tests. CI builds and uploads workflow artifacts only;
 GitHub Releases and tags are managed manually.
 

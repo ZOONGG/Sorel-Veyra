@@ -21,7 +21,7 @@ $before=Read-Jar $Baseline;$after=Read-Jar $Candidate
 $differences=@(foreach($key in @(@($before.Keys)+@($after.Keys) | Sort-Object -Unique)) {
     if($before[$key] -ne $after[$key]) { [ordered]@{path=$key;before=$before[$key];after=$after[$key]} }
 })
-$allowed='^(weave\.mod\.json|dev/veyra/(client/(clickgui/(ClickGui(\$|\.)|ModuleDescriptions\.)|module/(Module(\$|\.)|ModuleManager\.|bind/CapturedBindInput\.|modules/(movement/Sprint\.|player/(SafeWalk(\$|\.)|AutoBlockIn\.)))|player/bridge/BridgeAssist(Context|Engine|Settings)\.)|weave/mixins/EntityPlayerSPMixin\.))'
+$allowed='^(META-INF/MANIFEST\.MF|weave\.mod\.json|dev/veyra/(client/(clickgui/(ClickGui(\$|\.)|ModuleDescriptions\.)|module/(Module(\$|\.)|ModuleManager\.|bind/CapturedBindInput\.|modules/(movement/Sprint\.|player/(SafeWalk(\$|\.)|AutoBlockIn\.)))|player/bridge/BridgeAssist(Context|Engine|Settings)\.)|weave/mixins/EntityPlayerSPMixin\.))'
 foreach($change in $differences) { if($change.path -notmatch $allowed) { throw "Unexpected JAR change: $($change.path)" } }
 foreach($key in $before.Keys) {
     if($key -match 'Timer|Freeze|assets/veyra/fonts|client/notification|client/clickgui/(Ui|font)|client/module/modules/combat/AutoBlock') {

@@ -9,7 +9,7 @@ ClickGUI открывается клавишей `Enter`.
 
 - Сохранены семейства боевых, двигательных, визуальных и инвентарных модулей Stormy.
 - Переработан ClickGUI: поиск с поддержкой русской раскладки, избранное, темы,
-  описания модулей и режимы биндов.
+  описания модулей и компактные бинды в заголовках.
 - Добавлены инструменты Player, включая AutoTool, AutoFish, SpeedMine и VoidClutch.
 - Конфиги хранятся отдельно в `.weave/veyra`; есть уведомления переключения модулей.
 
@@ -21,11 +21,11 @@ ClickGUI открывается клавишей `Enter`.
 | Область | Stormy | Veyra |
 | --- | --- | --- |
 | Базовые функции | AutoClicker, AimAssist, Reach, Velocity, Backtrack, движение, ESP, инвентарь | Эти семейства модулей сохранены в реестре; клавиша ClickGUI — `Enter`. |
-| Интерфейс | GUI и идентификаторы Stormy | Новый GUI, поиск, избранное, темы, описания, режимы биндов и отдельные конфиги. |
+| Интерфейс | GUI и идентификаторы Stormy | Новый GUI, поиск, избранное, темы, описания, компактные бинды в заголовках и отдельные конфиги. |
 | Player | Нет SpeedMine и макроса Pearl → Fireball в реестре | SpeedMine ускоряет локальное разрушение блоков в 1.00–2.50 раза, не меняя игровые часы. VoidClutch выполняет последовательность Pearl → Fireball по бинду. |
 | Timer | Диапазон 0.50–2.50, обновление по тикам; сброс в GUI | Диапазон 0.00–2.50, обновление каждый кадр; при 0.00 тики клиента остановлены, но GUI и управляющие бинды обслуживаются. Переработаны Strafe only и восстановление часов. TimerSpeedPolicy — внутренняя логика, а не отдельный модуль. |
-| Дополнения | Исходный набор | Зарегистрированы JumpReset, TargetFilter, NoJumpDelay, AntiAFK, AutoTool, AutoBlockIn, AutoFish, NoUseDelay, BedESP, BedPlates, MurderFinder и Freecam. |
-| Доступность | AutoPlace зарегистрирован | AutoPlace и старый Clutch не зарегистрированы. SafeWalk содержит помощь при строительстве мостов, доступен AutoBlockIn; это не точное повторение AutoPlace. |
+| Дополнения | Исходный набор | Зарегистрированы JumpReset, TargetFilter, NoJumpDelay, AntiAFK, AutoTool, AutoFish, NoUseDelay, BedESP, BedPlates, MurderFinder и Freecam. |
+| Доступность | AutoPlace зарегистрирован | AutoPlace и старый Clutch не зарегистрированы. SafeWalk содержит помощь при строительстве мостов. AutoBlockIn удалён; старые конфигурации совместимы. |
 
 **Pearl → Fireball:** назначьте press-бинд **VoidClutch**, положите Ender Pearl и
 fire charge в хотбар. Макрос направляет камеру полностью вверх примерно за 50 мс,
@@ -70,7 +70,7 @@ loader. Другие сборки Lunar и версии loader не провер
 .\gradlew.bat clean build
 ```
 
-JAR: `build/libs/Veyra-1.0.1.jar`. Задача `build` включает JUnit-тесты.
+JAR: `build/libs/Veyra-1.0.2.jar`. Задача `build` включает JUnit-тесты.
 CI собирает workflow-артефакты; Release и теги публикуются вручную.
 Для явной установки в Sorel:
 
